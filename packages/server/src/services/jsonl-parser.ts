@@ -25,6 +25,16 @@ export interface SessionMetadata {
   firstUserMessage: string;
   lastUserMessage: string;
   /**
+   * Claude Code's own recap of what the session is for, most recent first-hand
+   * wins. Null for a session that has never been away long enough to write one.
+   */
+  recap: { text: string; at: string } | null;
+  /**
+   * Every git branch the session worked on, first seen first. One is normal;
+   * several means it covered more than one piece of work.
+   */
+  branches: string[];
+  /**
    * Sum of calculateCost() applied per assistant turn, at that turn's own
    * model — not totalTokens priced at whatever model happened to run last.
    * Sessions that switch models mid-way (main loop upgraded models, a tail
@@ -59,6 +69,10 @@ function parseJsonlLine(raw: string): ParsedMessage | null {
         claudeVersion: obj.version,
         permissionMode: obj.permissionMode,
         remoteUrl: obj.url ?? null,
+        // away_summary carries its text as a plain string, not content blocks.
+        // It is Claude Code's own recap of what the session is for, which is a
+        // better answer to "what is this session" than anything derived.
+        summary: typeof obj.content === 'string' ? obj.content : undefined,
       };
     }
 
@@ -157,11 +171,25 @@ function filenameSessionId(jsonlPath: string): string | null {
  * Aggregate session metadata from a list of already-parsed messages. Pure — the
  * single source of truth shared by the file- and container-based parsers.
  */
+/**
+ * Claude Code appends a UI hint to every recap. It is an instruction to
+ * somebody sitting at the terminal, not part of what the session is about.
+ */
+function cleanRecap(text: string): string {
+  return text.replace(/\s*\(disable recaps in \/config\)\s*$/i, '').trim();
+}
+
 function aggregateSessionMetadata(
   messages: ParsedMessage[],
   sessionIdFallback: string | null,
 ): SessionMetadata | null {
   if (messages.length === 0) return null;
+
+  const noteBranch = (branch: string | undefined) => {
+    // 'HEAD' is a detached checkout, which says nothing about what was worked
+    // on and would otherwise look like a branch of its own.
+    if (branch && branch !== 'HEAD' && !branches.includes(branch)) branches.push(branch);
+  };
 
   let sessionId = '';
   let permissionMode = '';
@@ -178,6 +206,11 @@ function aggregateSessionMetadata(
   let totalCacheReadTokens = 0;
   let totalCacheWriteTokens = 0;
   let messageCount = 0;
+  // The most recent recap wins: it describes the session as it stands.
+  let recap: SessionMetadata['recap'] = null;
+  // Every branch the session worked on, in the order first seen. One is the
+  // normal case; several means the session covered more than one thing.
+  const branches: string[] = [];
   let toolCallCount = 0;
   let firstUserMessage = '';
   let lastUserMessage = '';
@@ -209,6 +242,10 @@ function aggregateSessionMetadata(
       // touched last.
       if (!cwd) cwd = parsed.cwd ?? cwd;
       if (!gitBranch) gitBranch = parsed.gitBranch ?? gitBranch;
+      noteBranch(parsed.gitBranch);
+      if (parsed.subtype === 'away_summary' && parsed.summary) {
+        recap = { text: cleanRecap(parsed.summary), at: parsed.timestamp };
+      }
       entrypoint = parsed.entrypoint ?? entrypoint;
       claudeVersion = parsed.claudeVersion ?? claudeVersion;
       remoteUrl = parsed.remoteUrl ?? remoteUrl;
@@ -254,6 +291,8 @@ function aggregateSessionMetadata(
   if (!sessionId) return null;
 
   return {
+    recap,
+    branches,
     sessionId,
     permissionMode,
     cwd,

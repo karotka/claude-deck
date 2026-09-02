@@ -329,7 +329,16 @@ from typing into a local one.
 
 ### Session detail
 
-The sidebar lists **the work a session touches**: the item it was started for,
+The sidebar leads with **Goal** — Claude Code's own recap of what the session
+is for, which it writes whenever you have been away. It beats anything derived:
+a long session's opening message is rarely still what it is about.
+
+Under it, a session that worked on **more than one branch** says so. That
+usually means more than one piece of work ended up in one conversation, which
+is worth knowing before scrolling two thousand messages for the part you
+remember. It is a fact, not a verdict — the branches are listed and you judge.
+
+Then **the work a session touches**: the item it was started for,
 plus the ones it keeps coming back to, each with its live tracker state.
 
 The two halves are found completely differently, and it is worth knowing which

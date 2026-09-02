@@ -292,7 +292,12 @@ registered transport. Nothing else should be asked.
 Sessions reach a tmux target two ways. The naming-convention matcher pairs a
 `TMUX_PREFIX`-named tmux session with a transcript by the tag in its opening
 prompt — built for the container workflow, and fitting nothing a person starts
-by hand. `tmux-ownership.ts` is the general one: tmux reports each pane's
+by hand. `tmux-ownership.ts` is the general one, and it answers two different questions.
+Ownership — which pane is this *process* in — binds a session running in a pane.
+Attachment — which pane is a *view* of this session — binds one that isn't in a
+pane at all, which is every `claude --bg` session, since those live under the
+daemon. The attach map is keyed by the short id `claude attach` takes, so
+callers match by prefix (`paneForSessionId`). For ownership: tmux reports each pane's
 process, `ps` gives the parentage, and Claude Code's registry says which
 transcript a pid is writing, so ownership is established rather than guessed.
 It runs *after* the placeholder pass — a session opened moments ago has no

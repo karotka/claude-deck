@@ -93,18 +93,54 @@ function isNoServer(err: unknown): boolean {
   return /no server running|error connecting to|no such file or directory/i.test(text);
 }
 
+/** Height the browser's pane is given when nothing else is attached. */
+const PANE_ROWS = '50';
+
+/**
+ * Whether to resize the window before capturing it.
+ *
+ * Two reasons not to, and both were being ignored on every poll:
+ *
+ * - **Somebody is attached in a terminal.** tmux sizes a window to its
+ *   attached client; resizing it back to the browser's viewport twice a second
+ *   started a tug of war, and a TUI redraws itself completely on every resize.
+ *   `tmux attach` became unusably slow, which is a strange thing for a
+ *   dashboard to do to the terminal it is watching. An attached client wins:
+ *   the browser renders whatever width the pane has.
+ * - **The size already matches.** A resize to the current size is a no-op to
+ *   tmux but not free, and asking costs the same one call as resizing did.
+ *
+ * A failed query resizes, which is the old behaviour and safe: the worst case
+ * is the pane being the size the browser asked for.
+ */
+async function shouldResize(sessionName: string, cols: number): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync('tmux', [
+      'display-message', '-p', '-t', `${sessionName}:0`,
+      '#{session_attached} #{window_width} #{window_height}',
+    ], { timeout: 3000 });
+    const [attached, width, height] = stdout.trim().split(/\s+/).map(Number);
+    if (attached > 0) return false;
+    return width !== cols || height !== Number(PANE_ROWS);
+  } catch {
+    return true;
+  }
+}
+
 export async function capturePane(
   sessionName: string,
   lines = 1000,
   cols?: number,
 ): Promise<string> {
   try {
-    // Detached tmux sessions default to 80x24 — see dockerExecCapture for
-    // the same rationale.
-    if (cols && cols > 0) {
+    // Detached tmux sessions default to 80x24, which makes the TUI wrap badly,
+    // so the window is sized to the browser's viewport. Conditionally, though —
+    // see shouldResize: doing it unconditionally on every poll made the session
+    // unusable for anyone attached in a terminal.
+    if (cols && cols > 0 && await shouldResize(sessionName, cols)) {
       try {
         await execFileAsync('tmux', [
-          'resize-window', '-t', `${sessionName}:0`, '-x', String(cols), '-y', '50',
+          'resize-window', '-t', `${sessionName}:0`, '-x', String(cols), '-y', PANE_ROWS,
         ], { timeout: 3000 });
       } catch { /* best-effort */ }
     }

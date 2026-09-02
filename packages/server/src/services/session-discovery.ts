@@ -29,7 +29,11 @@ import {
 import { mapWithConcurrency } from './concurrency.js';
 import { extractTag, tagFromName } from './tagging.js';
 import { claudeSessions, type ClaudeSession } from './claude-sessions.js';
-import { tmuxSessionsForPids } from './tmux-ownership.js';
+import {
+  tmuxSessionsForPids,
+  tmuxSessionsForAttachedIds,
+  paneForSessionId,
+} from './tmux-ownership.js';
 import { getProviders, target } from '../providers/registry.js';
 import type { DiscoverOptions } from '../providers/types.js';
 
@@ -447,17 +451,28 @@ export async function discoverLocalSessions(opts: DiscoverOptions = {}): Promise
     .filter(s => s.pid !== null && !s.tmuxSession)
     .map(s => s.pid as number);
   if (registeredPids.length > 0) {
-    const owners = await tmuxSessionsForPids(registeredPids);
+    // Two ways a session reaches a pane, and they answer different questions.
+    // Ownership: which pane is this process in — the session itself runs there.
+    // Attachment: which pane is a *view* of this session — the session runs
+    // elsewhere (a background session lives under the daemon, in no pane at
+    // all) while a `claude attach` client in a pane can read and drive it.
+    const [owners, attached] = await Promise.all([
+      tmuxSessionsForPids(registeredPids),
+      tmuxSessionsForAttachedIds(),
+    ]);
     // One pane drives one session: if two transcripts somehow claim the same
     // tmux name, the first keeps it rather than both offering a terminal that
     // types into the other's pane.
     const claimed = new Set(fileSessions.map(s => s.tmuxSession).filter(Boolean) as string[]);
     for (const session of fileSessions) {
-      if (session.tmuxSession || session.pid === null) continue;
-      const owner = owners.get(session.pid);
-      if (!owner || claimed.has(owner)) continue;
-      session.tmuxSession = owner;
-      claimed.add(owner);
+      if (session.tmuxSession) continue;
+      // Ownership first: a session running in a pane is better addressed
+      // directly than through a client that might come and go.
+      const pane = (session.pid !== null ? owners.get(session.pid) : undefined)
+        ?? paneForSessionId(session.id, attached);
+      if (!pane || claimed.has(pane)) continue;
+      session.tmuxSession = pane;
+      claimed.add(pane);
     }
   }
 
@@ -796,6 +811,8 @@ async function scanFilesystem(
           estimatedCost: cost,
           firstUserMessage: meta.firstUserMessage,
           lastUserMessage: meta.lastUserMessage,
+          ...(meta.recap ? { recap: meta.recap } : {}),
+          ...(meta.branches.length > 1 ? { branches: meta.branches } : {}),
           subagents,
           source: 'local',
         });

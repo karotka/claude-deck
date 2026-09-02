@@ -74,6 +74,10 @@ export interface Session {
   firstUserMessage: string;
   lastUserMessage: string;
   subagents: SubagentInfo[];
+  /** Claude Code's own recap of what the session is for. */
+  recap?: { text: string; at: string };
+  /** Every branch the session worked on. Present only when there is more than one. */
+  branches?: string[];
   /**
    * Where the session lives. An open string, not a union: providers name their
    * own sources, and nothing in the UI switches on the value — it is rendered

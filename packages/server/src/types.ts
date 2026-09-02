@@ -34,6 +34,20 @@ export interface Session {
   subagents: SubagentInfo[];
 
   /**
+   * Claude Code's own recap of what the session is for — what it writes when
+   * you have been away. Better than anything derivable: it is the session's
+   * account of itself, not an inference from its first message.
+   */
+  recap?: { text: string; at: string };
+
+  /**
+   * Every git branch the session worked on. One is the normal case; several
+   * means it covered more than one piece of work, which is worth knowing before
+   * reading 2000 messages looking for the bit you remember.
+   */
+  branches?: string[];
+
+  /**
    * Where this session lives — 'local', 'tmux', 'docker', 'remote', or whatever
    * a third-party provider calls its sessions. Deliberately an open string: it
    * used to be a closed union, which meant every new backend had to be added to
@@ -144,6 +158,11 @@ export interface ParsedMessage {
   permissionMode?: string;
   sessionId?: string;
   remoteUrl?: string;
+  /**
+   * Plain-string body of a `system` record. Only away_summary uses it, and it
+   * carries Claude Code's own recap of what the session is for.
+   */
+  summary?: string;
 }
 
 export interface TokenUsage {

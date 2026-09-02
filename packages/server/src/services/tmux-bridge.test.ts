@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   spawnCalls: [] as { file: string; args: string[]; stdin: string }[],
   /** Set to make the next execFile reject, for the failure paths. */
   execError: null as unknown,
+  /** `#{session_attached} #{window_width} #{window_height}` for capturePane. */
+  paneInfo: '0 80 24',
 }));
 
 vi.mock('node:child_process', () => ({
@@ -19,8 +21,9 @@ vi.mock('node:child_process', () => ({
     cb: (err: unknown, res: { stdout: string; stderr: string }) => void,
   ) => {
     h.execCalls.push({ file, args });
-    if (h.execError) cb(h.execError, { stdout: '', stderr: '' });
-    else cb(null, { stdout: '', stderr: '' });
+    if (h.execError) return cb(h.execError, { stdout: '', stderr: '' });
+    const stdout = args[0] === 'display-message' ? h.paneInfo : '';
+    cb(null, { stdout, stderr: '' });
   },
   spawn: (file: string, args: string[]) => {
     const child = new EventEmitter() as EventEmitter & {
@@ -42,10 +45,11 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-const { sendKeys, listTmuxSessions, wasTmuxScanRecent } = await import('./tmux-bridge.js');
+const { sendKeys, listTmuxSessions, wasTmuxScanRecent, capturePane } = await import('./tmux-bridge.js');
 
 beforeEach(() => {
   h.execError = null;
+  h.paneInfo = '0 80 24';
   h.execCalls.length = 0;
   h.spawnCalls.length = 0;
 });
@@ -123,5 +127,45 @@ describe('listTmuxSessions', () => {
       stderr: 'fork failed: resource temporarily unavailable\n',
     });
     expect(await listTmuxSessions()).toEqual([]);
+  });
+});
+
+describe('capturePane resizing', () => {
+  const resizes = () => h.execCalls.filter(c => c.args[0] === 'resize-window');
+
+  it('sizes a detached pane to the viewport', async () => {
+    // Detached tmux sessions default to 80x24, which makes the TUI wrap badly.
+    await capturePane('sess', 50, 120);
+    expect(resizes()).toHaveLength(1);
+    expect(resizes()[0].args).toContain('120');
+  });
+
+  it('leaves the pane alone while someone is attached in a terminal', async () => {
+    // tmux sizes a window to its attached client. Resizing it back to the
+    // browser's viewport twice a second started a tug of war, and a TUI redraws
+    // completely on every resize — `tmux attach` became unusably slow. The
+    // person at the terminal wins; the browser renders whatever width it gets.
+    h.paneInfo = '1 100 30';
+    await capturePane('sess', 50, 200);
+    expect(resizes()).toHaveLength(0);
+  });
+
+  it('does not resize a pane that is already the right size', async () => {
+    h.paneInfo = '0 120 50';
+    await capturePane('sess', 50, 120);
+    expect(resizes()).toHaveLength(0);
+  });
+
+  it('resizes when the pane size cannot be read', async () => {
+    // Safe fallback, and the old behaviour: the worst case is a pane the size
+    // the browser asked for.
+    h.paneInfo = 'nonsense';
+    await capturePane('sess', 50, 120);
+    expect(resizes()).toHaveLength(1);
+  });
+
+  it('never resizes when the caller gives no width', async () => {
+    await capturePane('sess', 50);
+    expect(resizes()).toHaveLength(0);
   });
 });

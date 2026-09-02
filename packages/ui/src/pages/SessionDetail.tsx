@@ -377,29 +377,59 @@ export function SessionDetail() {
             </div>
           )}
 
+          {session.recap && (
+            <div className="rounded-md border border-border bg-muted/50 p-3 text-sm">
+              <div className="text-xs font-medium text-muted-foreground mb-1">Goal</div>
+              {/* Claude Code's own recap, not something derived here. It is the
+                  session's account of itself, which beats guessing from the
+                  first message — a long session's opening line is rarely still
+                  what it is about. */}
+              <div className="text-xs leading-snug whitespace-pre-wrap">{session.recap.text}</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                as of {timeAgo(session.recap.at)}
+              </div>
+            </div>
+          )}
+
+          {session.branches && session.branches.length > 1 && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+              <div className="font-medium text-amber-300 mb-1">
+                Covers {session.branches.length} branches
+              </div>
+              {/* A fact rather than a verdict: several branches in one session
+                  usually means several pieces of work, and that is worth seeing
+                  before scrolling 2000 messages for the part you remember. */}
+              <div className="text-muted-foreground">
+                {session.branches.join(' · ')}
+              </div>
+            </div>
+          )}
+
           <div className="rounded-md border border-border bg-muted/50 p-3 text-sm space-y-2">
             <div className="font-medium mb-2">Session Info</div>
             <SessionIdRow id={session.id} />
-            <InfoRow label="Status" value={session.status.toUpperCase()} />
+            {/* Status and mode belong together: what it is doing, and under what
+                permissions. Model next, because it is the other thing that
+                changes what you get. */}
+            <InfoRow label="Status" value={`${session.status.toUpperCase()} · ${session.permissionMode || 'default'}`} />
             <InfoRow label="Model" value={session.model} />
-            <InfoRow label="Entrypoint" value={session.entrypoint} />
-            <InfoRow label="Version" value={session.claudeVersion} />
-            <InfoRow label="Mode" value={session.permissionMode} />
             <InfoRow label="Branch" value={session.gitBranch} />
             <InfoRow label="CWD" value={session.cwd} />
-            <InfoRow label="Messages" value={String(session.messageCount)} />
-            <InfoRow label="Tool Calls" value={String(session.toolCallCount)} />
-            <InfoRow label="Started" value={session.startedAt ? timeAgo(session.startedAt) : 'unknown'} />
-            <InfoRow label="Last Activity" value={session.lastActivityAt ? timeAgo(session.lastActivityAt) : 'unknown'} />
-            {session.pid && <InfoRow label="PID" value={String(session.pid)} />}
-            {session.source !== 'local' && <InfoRow label="Source" value={session.source} />}
+            <InfoRow label="Activity" value={`${session.messageCount} msgs · ${session.toolCallCount} tools`} />
+            <InfoRow
+              label="Age"
+              value={
+                session.startedAt
+                  ? `${timeAgo(session.startedAt)} · last ${session.lastActivityAt ? timeAgo(session.lastActivityAt) : '?'}`
+                  : 'unknown'
+              }
+            />
             {session.tag && <InfoRow label="Tag" value={session.tag} />}
-            {session.target && (
-              <InfoRow
-                label={session.target.kind === 'tmux' ? 'tmux session' : 'Container'}
-                value={session.target.label ?? session.target.ref}
-              />
-            )}
+            {/* Entrypoint is always "cli", the Claude Code version rarely
+                matters, and the tmux name is the attach command in the header —
+                three rows that were only ever taking up space. The pid stays:
+                it is what you need to go and kill something. */}
+            {session.pid && <InfoRow label="PID" value={String(session.pid)} />}
           </div>
 
           <TokenUsageBadge
