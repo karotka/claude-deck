@@ -1,0 +1,78 @@
+{
+  "$comment": [
+    "A worked example: the Jira-driven agent workflow claude-monitor used to",
+    "have hardcoded. Copy this to claude-deck.config.json at the repo root and",
+    "edit it, or delete the parts you don't use — every key is optional.",
+    "Nothing here is required to run: with no config file at all you get the",
+    "session dashboard, transcripts, costs and terminals."
+  ],
+
+  "$comment_tag": [
+    "What a tag looks like. A tag is the short identifier a session belongs to;",
+    "it ties a container name, a session's opening prompt, and a tracker item",
+    "together. The default is this Jira/Linear key shape, so you only need this",
+    "key if your scheme differs (e.g. \"#\\\\d+\" for GitHub issues)."
+  ],
+  "tag": {
+    "pattern": "[A-Z][A-Z0-9]+-\\d+"
+  },
+
+  "$comment_launchers": [
+    "What the Start development dialog can run. Each entry is a command of",
+    "yours with {{tag}} substituted; claude-deck owns no part of what it does.",
+    "Omit this key entirely and the dialog is simply absent."
+  ],
+  "launchers": [
+    {
+      "id": "local",
+      "label": "Start development",
+      "inputLabel": "Issue key",
+      "description": "Builds and starts an agent container on this machine.",
+      "command": ["~/code/my-repo/docker/start-agent.sh", "{{tag}}"],
+      "containerPrefix": "jira-agent-",
+      "launchPrefix": "jira-launch-"
+    },
+    {
+      "id": "vm",
+      "label": "Run on the shared VM",
+      "inputLabel": "Issue key",
+      "description": "Starts the same container on the shared VM instead.",
+      "command": ["~/code/my-repo/docker/agent-on-vm.sh", "start", "{{tag}}"],
+      "containerPrefix": "jira-agent-",
+      "launchPrefix": "jira-launch-vm-",
+      "remote": true
+    }
+  ],
+
+  "$comment_workflow": [
+    "How to read the per-item artifact directories under SESSIONS_DIR — one",
+    "subdirectory per tag, written by your own agent workflow as it works.",
+    "A phase is done when its signal file exists and is non-empty.",
+    "  \"signal\": \"file.md\"                  one file",
+    "  \"signal\": [\"a.md\", \"b.md\"]           any one of them",
+    "  \"signal\": {\"everyGroup\": \"pr.md\"}    every group dir carries it",
+    "  \"linear\": false                       a side track that never blocks",
+    "Reaching a later linear phase implies the earlier ones, so a workflow that",
+    "skips a step doesn't show as stuck at it forever."
+  ],
+  "workflow": {
+    "phases": [
+      { "label": "Analysis", "signal": "analysis.md" },
+      { "label": "Architecture", "signal": "architecture-decision.md" },
+      { "label": "Approval", "signal": ["answers/architect.md", "questions/user.md"] },
+      { "label": "Implementation", "signal": { "everyGroup": "pr-info.md" } },
+      { "label": "Docs", "signal": "doc-updates.md", "linear": false },
+      { "label": "Complete", "signal": { "everyGroup": "pr-info.md" } }
+    ],
+    "groups": {
+      "dir": "repos",
+      "noun": "repo",
+      "signals": {
+        "implementation": "implementation.md",
+        "review": "review-findings.md",
+        "tests": "test-results.md",
+        "PR": "pr-info.md"
+      }
+    }
+  }
+}
