@@ -41,7 +41,9 @@ export async function interactRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/sessions/:id/capture', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { lines: linesQ, cols: colsQ } = request.query as { lines?: string; cols?: string };
+    const { lines: linesQ, cols: colsQ, rows: rowsQ } = request.query as {
+      lines?: string; cols?: string; rows?: string;
+    };
     const linesNum = Number(linesQ);
     const lines = Number.isFinite(linesNum) && linesNum > 0
       ? Math.min(Math.floor(linesNum), 100000)
@@ -49,6 +51,13 @@ export async function interactRoutes(app: FastifyInstance): Promise<void> {
     const colsNum = Number(colsQ);
     const cols = Number.isFinite(colsNum) && colsNum > 0
       ? Math.min(Math.max(Math.floor(colsNum), 40), 500)
+      : undefined;
+    const rowsNum = Number(rowsQ);
+    // Floored well above a usable panel: a TUI given ten rows redraws into
+    // something unreadable, and a scrollbar on an over-tall pane is a far
+    // better outcome than a squashed one.
+    const rows = Number.isFinite(rowsNum) && rowsNum > 0
+      ? Math.min(Math.max(Math.floor(rowsNum), 20), 200)
       : undefined;
 
     const session = getCachedSession(id);
@@ -63,7 +72,7 @@ export async function interactRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const content = await transport.capture(session.target.ref, { lines, cols });
+      const content = await transport.capture(session.target.ref, { lines, cols, rows });
       return { content };
     } catch (err) {
       return reply.status(500).send({

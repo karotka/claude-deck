@@ -48,6 +48,9 @@ export function TerminalCapture({
   const [scrollbackExhausted, setScrollbackExhausted] = useState(false);
   const outputRef = useRef<HTMLPreElement>(null);
   const userScrolledUpRef = useRef(false);
+  const splitOverheadRef = useRef(0);
+  const wheelAccumRef = useRef(0);
+  const wheelInFlightRef = useRef(false);
 
   useEffect(() => {
     setInput(sessionStorage.getItem(storageKey) ?? '');
@@ -70,8 +73,15 @@ export function TerminalCapture({
     try {
       const n = overrideLines ?? lines;
       const cols = computeCols(outputRef.current);
+      // The pane has to be taller than the box by however many rows the split
+      // hands to the footer — those are drawn under the prompt, not in the
+      // box, so asking for exactly the box's height leaves that many rows of
+      // it empty. Measured from the last frame, so it self-corrects.
+      const visible = computeRows(outputRef.current);
+      const rows = visible === null ? null : visible + splitOverheadRef.current;
       const colsQ = cols ? `&cols=${cols}` : '';
-      const res = await fetch(`/api/sessions/${sessionId}/capture?lines=${n}${colsQ}`);
+      const rowsQ = rows ? `&rows=${rows}` : '';
+      const res = await fetch(`/api/sessions/${sessionId}/capture?lines=${n}${colsQ}${rowsQ}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'Failed to capture');
@@ -100,6 +110,16 @@ export function TerminalCapture({
     if (outputRef.current && !userScrolledUpRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
+  }, [output]);
+
+  // Rows the split takes out of the box: the status lines and the rule above
+  // them. Read off the whole frame rather than counted by rule, so a change to
+  // what splitPane peels off can't silently leave a strip of dead pane.
+  useEffect(() => {
+    splitOverheadRef.current = Math.max(
+      0,
+      countLines(output) - countLines(splitPane(output).body),
+    );
   }, [output]);
 
   const handleOutputScroll = () => {
@@ -171,6 +191,50 @@ export function TerminalCapture({
       if (res.ok && !(await applyResponsePane(res))) setTimeout(fetchCapture, 300);
     } catch { /* ignore */ }
     setSending(false);
+  };
+
+  /**
+   * Turn the wheel in the session rather than in the panel.
+   *
+   * There is nothing to scroll here: the pane is sized to the box and holds no
+   * scrollback, so the browser's own scrolling has nowhere to go. What the
+   * wheel means over a terminal running a full-screen TUI is "scroll the
+   * application", and Claude Code's TUI asks for exactly those events. So the
+   * turn is forwarded and the pane comes back showing what it scrolled to.
+   *
+   * Kept off the `sending` flag on purpose — that one disables the prompt and
+   * says "Sending…", which is not what a scroll should do to the thing you are
+   * typing into.
+   */
+  const sendWheel = async (key: 'WheelUp' | 'WheelDown') => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      if (res.ok && !(await applyResponsePane(res))) await fetchCapture();
+    } catch { /* a transport that won't scroll is not worth a message */ }
+  };
+
+  const handleWheel = (e: React.WheelEvent<HTMLElement>) => {
+    const el = outputRef.current;
+    // If the box really does overflow — a pane taller than the panel, which
+    // happens on a window too short for the floor the server clamps to — the
+    // browser's scrolling is the right one and this stays out of the way.
+    if (el && el.scrollHeight > el.clientHeight + 1) return;
+    if (!canInteract) return;
+    // A trackpad emits many small deltas per gesture; a notch is one turn.
+    wheelAccumRef.current += e.deltaY;
+    const NOTCH = 40;
+    if (Math.abs(wheelAccumRef.current) < NOTCH) return;
+    const key = wheelAccumRef.current < 0 ? 'WheelUp' : 'WheelDown';
+    wheelAccumRef.current = 0;
+    // One turn in flight at a time. Without this a flick queues a dozen round
+    // trips and the pane keeps moving long after the fingers stop.
+    if (wheelInFlightRef.current) return;
+    wheelInFlightRef.current = true;
+    void sendWheel(key).finally(() => { wheelInFlightRef.current = false; });
   };
 
   // Send the buffered input followed by a Tab keystroke (no Enter), so the
@@ -364,6 +428,7 @@ export function TerminalCapture({
       <pre
         ref={outputRef}
         onScroll={handleOutputScroll}
+        onWheel={handleWheel}
         // Same type and colour as the transcript beside it. The green-on-black
         // was a terminal costume: Claude Code's own TUI paints its colours
         // through ANSI, which comes through anyway, so the only thing a green
@@ -460,6 +525,38 @@ function computeCols(el: HTMLElement | null): number | null {
   if (probeWidth <= 0) return null;
   const charWidth = probeWidth / 100;
   return Math.max(40, Math.floor(innerWidth / charWidth));
+}
+
+/**
+ * Rows the panel can show, measured the same way as the columns.
+ *
+ * Without this the pane was a fixed 50 rows however tall the panel happened to
+ * be. Claude Code's TUI runs on the alternate screen, so tmux holds no
+ * scrollback and the pane is the entire capture: 50 rows in a panel that fits
+ * 56 left a band of dead space that no amount of scrolling would fill, and the
+ * same 50 rows in a panel that fits 30 pushed the prompt out of sight.
+ */
+function computeRows(el: HTMLElement | null): number | null {
+  if (!el) return null;
+  const innerHeight = el.clientHeight - getVerticalPadding(el);
+  if (innerHeight <= 0) return null;
+  const probe = document.createElement('span');
+  // Ten rows rather than one: line box heights are fractional, and rounding a
+  // single one magnifies the error by however many rows fit in the panel.
+  probe.textContent = 'X\n'.repeat(10).trimEnd();
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.whiteSpace = 'pre';
+  el.appendChild(probe);
+  const probeHeight = probe.getBoundingClientRect().height;
+  el.removeChild(probe);
+  if (probeHeight <= 0) return null;
+  return Math.max(10, Math.floor(innerHeight / (probeHeight / 10)));
+}
+
+function getVerticalPadding(el: HTMLElement): number {
+  const s = window.getComputedStyle(el);
+  return parseFloat(s.paddingTop || '0') + parseFloat(s.paddingBottom || '0');
 }
 
 function getHorizontalPadding(el: HTMLElement): number {

@@ -25,6 +25,14 @@ export interface CaptureOptions {
   lines?: number;
   /** Width to render at, so captured lines fill the panel. */
   cols?: number;
+  /**
+   * Height to render at, for the same reason. Claude Code's TUI runs on the
+   * alternate screen, where tmux keeps no scrollback: the pane *is* the whole
+   * of what can be shown. A pane shorter than the panel leaves dead space
+   * under it with nothing to scroll to, and one taller than the panel hides
+   * its own top. Matching the two is what makes the panel a terminal.
+   */
+  rows?: number;
 }
 
 /**

@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { config } from '../config.js';
 import { execFileRetrying } from './exec-retry.js';
-import { ALLOWED_RAW_KEYS } from './tmux-bridge.js';
+import { ALLOWED_RAW_KEYS, wheelBytes } from './tmux-bridge.js';
 import { sanitizePane } from './ansi.js';
 import {
   sshMuxPathPrefix,
@@ -488,6 +488,13 @@ export async function vmSend(
 }
 
 export async function vmSendKey(issueKey: string, key: string): Promise<string | null> {
+  if (wheelBytes(key)) {
+    // Deliberately not forwarded. A wheel turn is a literal escape sequence,
+    // and this command crosses three shells before a shell runs it — the one
+    // path in the app where quoting is a security question rather than a
+    // cosmetic one. Scrolling a remote pane is not worth widening it.
+    throw new Error('Remote panes do not forward the wheel.');
+  }
   if (!ALLOWED_RAW_KEYS.has(key)) {
     throw new Error(`Disallowed key: ${key}`);
   }

@@ -93,8 +93,11 @@ function isNoServer(err: unknown): boolean {
   return /no server running|error connecting to|no such file or directory/i.test(text);
 }
 
-/** Height the browser's pane is given when nothing else is attached. */
-const PANE_ROWS = '50';
+/**
+ * Height the browser's pane is given when the caller doesn't measure one.
+ * The browser does measure, so this is the fallback for internal callers.
+ */
+const DEFAULT_PANE_ROWS = 50;
 
 /**
  * Whether to resize the window before capturing it.
@@ -113,7 +116,11 @@ const PANE_ROWS = '50';
  * A failed query resizes, which is the old behaviour and safe: the worst case
  * is the pane being the size the browser asked for.
  */
-async function shouldResize(sessionName: string, cols: number): Promise<boolean> {
+async function shouldResize(
+  sessionName: string,
+  cols: number,
+  rows: number,
+): Promise<boolean> {
   try {
     const { stdout } = await execFileAsync('tmux', [
       'display-message', '-p', '-t', `${sessionName}:0`,
@@ -121,7 +128,7 @@ async function shouldResize(sessionName: string, cols: number): Promise<boolean>
     ], { timeout: 3000 });
     const [attached, width, height] = stdout.trim().split(/\s+/).map(Number);
     if (attached > 0) return false;
-    return width !== cols || height !== Number(PANE_ROWS);
+    return width !== cols || height !== rows;
   } catch {
     return true;
   }
@@ -131,16 +138,17 @@ export async function capturePane(
   sessionName: string,
   lines = 1000,
   cols?: number,
+  rows = DEFAULT_PANE_ROWS,
 ): Promise<string> {
   try {
     // Detached tmux sessions default to 80x24, which makes the TUI wrap badly,
     // so the window is sized to the browser's viewport. Conditionally, though —
     // see shouldResize: doing it unconditionally on every poll made the session
     // unusable for anyone attached in a terminal.
-    if (cols && cols > 0 && await shouldResize(sessionName, cols)) {
+    if (cols && cols > 0 && await shouldResize(sessionName, cols, rows)) {
       try {
         await execFileAsync('tmux', [
-          'resize-window', '-t', `${sessionName}:0`, '-x', String(cols), '-y', PANE_ROWS,
+          'resize-window', '-t', `${sessionName}:0`, '-x', String(cols), '-y', String(rows),
         ], { timeout: 3000 });
       } catch { /* best-effort */ }
     }
@@ -206,13 +214,46 @@ export const ALLOWED_RAW_KEYS = new Set([
   'C-c', 'C-d',
 ]);
 
+/**
+ * The wheel, which is not a key.
+ *
+ * tmux has no `send-keys` name for a wheel turn, because a wheel turn is not a
+ * key — it is bytes the application asked to be sent. Claude Code's TUI turns
+ * on SGR mouse reporting (verified on a live pane: `mouse_any_flag` and
+ * `mouse_sgr_flag` both set), so a tick is `ESC [ < 64 ; col ; row M`, 65 for
+ * down. `send-keys -l` writes those bytes into the pane, which is exactly what
+ * a terminal does when the wheel turns over it.
+ *
+ * This is the only way to scroll a Claude Code pane at all: the TUI runs on the
+ * alternate screen, so tmux holds no scrollback and there is no history behind
+ * the frame to pan over. Scrolling has to be the application's, not the
+ * terminal's.
+ *
+ * Three ticks per turn is the usual terminal notch, and the coordinates are the
+ * pane's top-left: the TUI scrolls its transcript wherever the pointer is, so
+ * the corner saves a round trip asking how big the pane is.
+ */
+const WHEEL_SEQUENCES: Record<string, string> = {
+  WheelUp: '\x1b[<64;1;1M',
+  WheelDown: '\x1b[<65;1;1M',
+};
+const TICKS_PER_TURN = 3;
+
+/** The bytes for a wheel turn, or null if `key` is not one. */
+export function wheelBytes(key: string): string | null {
+  const seq = WHEEL_SEQUENCES[key];
+  return seq ? seq.repeat(TICKS_PER_TURN) : null;
+}
+
 export async function sendKey(sessionName: string, key: string): Promise<void> {
-  if (!ALLOWED_RAW_KEYS.has(key)) {
+  const wheel = wheelBytes(key);
+  if (!wheel && !ALLOWED_RAW_KEYS.has(key)) {
     throw new Error(`Disallowed key: ${key}`);
   }
   try {
     await execFileAsync('tmux', [
-      'send-keys', '-t', `${sessionName}:0.0`, key,
+      // -l for the wheel: its bytes are a literal sequence, not a key name.
+      'send-keys', '-t', `${sessionName}:0.0`, ...(wheel ? ['-l', wheel] : [key]),
     ], { timeout: 5000 });
   } catch (err) {
     throw new Error(`Failed to send key ${key} to ${sessionName}: ${err}`);

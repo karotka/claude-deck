@@ -24,7 +24,7 @@ import type { SessionTransport } from './types.js';
 /** A tmux session on this machine. `ref` is the tmux session name. */
 export const tmuxTransport: SessionTransport = {
   kind: 'tmux',
-  capture: (ref, { lines, cols }) => capturePane(ref, lines, cols),
+  capture: (ref, { lines, cols, rows }) => capturePane(ref, lines, cols, rows),
   async send(ref, text, appendEnter) {
     await sendKeys(ref, text, appendEnter);
     return null;
@@ -38,7 +38,7 @@ export const tmuxTransport: SessionTransport = {
 /** A container on this machine. `ref` is the container name. */
 export const dockerTransport: SessionTransport = {
   kind: 'docker',
-  capture: (ref, { lines, cols }) => dockerExecCapture(ref, lines, cols),
+  capture: (ref, { lines, cols, rows }) => dockerExecCapture(ref, lines, cols, rows),
   async send(ref, text, appendEnter) {
     await dockerExecSend(ref, text, appendEnter);
     return null;
@@ -61,6 +61,10 @@ export const dockerTransport: SessionTransport = {
  */
 export const remoteTransport: SessionTransport = {
   kind: 'remote',
+  // Height is not passed through: the remote pane is served by a frame loop
+  // keyed on (lines, cols) and resized out of band, so varying it would add a
+  // dimension to the stream key and tear a stream down whenever two viewers
+  // had different window heights. Remote panes stay at their fixed height.
   capture: (ref, { lines, cols }) => vmCapture(ref, lines, cols),
   send: (ref, text, appendEnter) => vmSend(ref, text, appendEnter),
   sendKey: (ref, key) => vmSendKey(ref, key),

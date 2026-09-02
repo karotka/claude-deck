@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { ALLOWED_RAW_KEYS, execFileWithInput } from './tmux-bridge.js';
+import { ALLOWED_RAW_KEYS, execFileWithInput, wheelBytes } from './tmux-bridge.js';
 import { execFileRetrying } from './exec-retry.js';
 import { sanitizePane, stripAnsi } from './ansi.js';
 import {
@@ -109,6 +109,7 @@ export async function dockerExecCapture(
   containerName: string,
   lines = 1000,
   cols?: number,
+  rows = 50,
 ): Promise<string> {
   // Try tmux capture-pane first (Claude runs in tmux session "agent")
   try {
@@ -120,7 +121,7 @@ export async function dockerExecCapture(
       try {
         await execFileAsync('docker', [
           'exec', containerName,
-          'tmux', 'resize-window', '-t', config.containerTmuxWindow, '-x', String(cols), '-y', '50',
+          'tmux', 'resize-window', '-t', config.containerTmuxWindow, '-x', String(cols), '-y', String(rows),
         ], { timeout: 5000 });
       } catch { /* best-effort — fall through to capture at current size */ }
     }
@@ -245,13 +246,15 @@ export async function dockerExecSendKey(
   containerName: string,
   key: string,
 ): Promise<void> {
-  if (!ALLOWED_RAW_KEYS.has(key)) {
+  const wheel = wheelBytes(key);
+  if (!wheel && !ALLOWED_RAW_KEYS.has(key)) {
     throw new Error(`Disallowed key: ${key}`);
   }
   try {
     await execFileAsync('docker', [
       'exec', containerName,
-      'tmux', 'send-keys', '-t', config.containerTmuxPane, key,
+      'tmux', 'send-keys', '-t', config.containerTmuxPane,
+      ...(wheel ? ['-l', wheel] : [key]),
     ], { timeout: 10000 });
   } catch (err) {
     throw new Error(`Failed to send key ${key} to ${containerName}: ${err}`);

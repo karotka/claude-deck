@@ -323,6 +323,19 @@ instructions to a terminal that is redrawing itself, and the browser is handed a
 finished frame — while `stripAnsi` removes the lot, for the paths that match on
 text (launch-phase detection, the pane splitter's structural checks).
 
+The pane is sized to the panel, width **and height**, because there is nothing
+behind the frame: the TUI runs on the alternate screen, so `history_size` is 0
+and `capture-pane -S -1000` returns exactly the visible rows. A pane shorter
+than the panel leaves dead space nothing can scroll into; a taller one hides its
+own top. The browser measures both and adds the rows `splitPane` hands to the
+footer, since those are drawn outside the box.
+
+For the same reason **the wheel is forwarded, not handled**. Claude Code's TUI
+turns on SGR mouse reporting, so a turn is sent as `ESC [ < 64 ; 1 ; 1 M`
+(`wheelBytes`) through `send-keys -l` and the application scrolls itself. Not
+on the remote path: those bytes would cross three shells, which is the one
+place in the app where quoting is a security question.
+
 `lib/ansi.ts` in the UI parses SGR into styled runs. Style carries across lines
 on purpose: a TUI sets a colour and draws several rows in it.
 

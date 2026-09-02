@@ -45,7 +45,7 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-const { sendKeys, listTmuxSessions, wasTmuxScanRecent, capturePane } = await import('./tmux-bridge.js');
+const { sendKeys, sendKey, listTmuxSessions, wasTmuxScanRecent, capturePane, wheelBytes } = await import('./tmux-bridge.js');
 
 beforeEach(() => {
   h.execError = null;
@@ -167,5 +167,57 @@ describe('capturePane resizing', () => {
   it('never resizes when the caller gives no width', async () => {
     await capturePane('sess', 50);
     expect(resizes()).toHaveLength(0);
+  });
+
+  it('sizes the pane to the height the caller measured', async () => {
+    // The pane used to be a fixed 50 rows however tall the panel was. Claude's
+    // TUI holds no scrollback, so a short pane left dead space the user could
+    // not scroll into and a tall one hid its own top.
+    h.paneInfo = '0 120 50';
+    await capturePane('sess', 50, 120, 36);
+    expect(resizes()).toHaveLength(1);
+    expect(resizes()[0].args).toEqual(
+      expect.arrayContaining(['-x', '120', '-y', '36']),
+    );
+  });
+
+  it('treats a height-only change as a reason to resize', async () => {
+    h.paneInfo = '0 120 50';
+    await capturePane('sess', 50, 120, 50);
+    expect(resizes()).toHaveLength(0);
+    await capturePane('sess', 50, 120, 51);
+    expect(resizes()).toHaveLength(1);
+  });
+});
+
+describe('wheel forwarding', () => {
+  const sends = () => h.execCalls.filter(c => c.args[0] === 'send-keys');
+
+  it('sends a wheel turn as literal SGR bytes, not a key name', async () => {
+    // tmux has no key name for the wheel. Claude Code's TUI asks for SGR mouse
+    // reporting, so a turn is the bytes a terminal would write into the pane.
+    await sendKey('sess', 'WheelUp');
+    expect(sends()).toHaveLength(1);
+    expect(sends()[0].args).toContain('-l');
+    expect(sends()[0].args.join(' ')).toContain('[<64;1;1M');
+  });
+
+  it('turns the other way for a wheel down', async () => {
+    await sendKey('sess', 'WheelDown');
+    expect(sends()[0].args.join(' ')).toContain('[<65;1;1M');
+  });
+
+  it('sends a notch of three ticks, as a terminal does', async () => {
+    await sendKey('sess', 'WheelUp');
+    const bytes = sends()[0].args[sends()[0].args.length - 1];
+    expect(bytes.split('[<64').length - 1).toBe(3);
+  });
+
+  it('still refuses a key that is neither allowed nor a wheel turn', async () => {
+    await expect(sendKey('sess', 'C-z')).rejects.toThrow(/Disallowed key/);
+  });
+
+  it('reports non-wheel keys as not a wheel', () => {
+    expect(wheelBytes('Enter')).toBeNull();
   });
 });
