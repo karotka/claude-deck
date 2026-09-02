@@ -443,6 +443,82 @@ through it, which is why an open tab keeps working across a container restart.
 
 ---
 
+## How it shares sessions with Claude Code
+
+**The same session, not a copy.** claude-deck has no agent, no daemon and no
+hook inside Claude Code. It reads the files Claude Code already writes and, for
+a session under tmux, types into the terminal that session is running in. A
+message sent from the browser is the same message the session would have got
+from the keyboard — it lands in the same conversation, costs the same tokens,
+and shows up in the terminal if someone is watching there. Two people can look
+at one session from both ends at once.
+
+Nothing is written back into Claude Code's own files. The one file claude-deck
+owns is `~/.claude/.claude-monitor-notes.json`, its own notes; the name is
+inherited from the tool this is forked from, so notes carry over.
+
+### Which sessions show up
+
+Any Claude Code writing to `~/.claude/projects` under the account running the
+server — started in a terminal, under tmux, with `--bg`, or by claude-deck
+itself. Add agent containers and another machine if you configure them.
+
+These do **not**:
+
+- **Sessions on `claude.ai/code`**, including anything you started from the web
+  app or drove by Remote Control. They leave no transcript on your disk and
+  there is no public API to ask for one. They are not hidden by a setting —
+  claude-deck cannot see them at all.
+- **Sessions under a different user or `HOME`**, since the transcripts are
+  somewhere else. Point `CLAUDE_DIR` at that directory if you have access to it.
+- **Sessions in a container that neither shares `~/.claude` nor matches
+  `CONTAINER_PREFIX`.** The prefix bounds every container operation on purpose.
+
+A session is listed whether or not it can be typed into; observe-only ones say
+so. Age is judged by the transcript rather than the file's timestamp, and a
+session with a live process is never hidden for being old.
+
+### Going back to a terminal
+
+Three ways out of the browser, and which one applies depends on how the session
+was started:
+
+- **It is already in tmux** — the detail page shows the exact
+  `tmux attach -t …` to paste. Attaching does not disturb the dashboard: while
+  a client is attached the pane keeps the size that client gives it, and the
+  browser renders whatever it gets.
+- **It was started with `claude --bg`** — there is nothing to attach to yet.
+  Those sessions live under the background daemon, not in a pane, so run
+  `claude attach <id>` yourself with the id Claude Code printed. Do it **inside
+  tmux** and claude-deck picks the session up through that client: it looks for
+  a pane *viewing* a session, not only for one containing it, and the page then
+  offers that pane's `tmux attach` like any other. Run it outside tmux and the
+  session stays observe-only in the browser.
+- **It has stopped** — **Reopen here** runs `claude --resume <id>` under tmux
+  and the conversation comes back typeable.
+
+**`claude --resume` is not an attach**, which is why Reopen here refuses while a
+session is live. Claude Code starts a *second* process on the same transcript,
+each with its own conversation in memory, and they answer independently: the
+same message gets one reply in the terminal and a different one in the browser,
+and both write to the same file. Exit the session where it runs, then reopen it.
+
+### Identity, and where it moves
+
+- **`/clear` starts a new session.** The id changes, so the old one stops
+  receiving messages and a new card appears. claude-deck records the succession
+  and an open tab follows it.
+- **A container restart writes a new transcript**, with the same consequence and
+  the same handling.
+- **The name** is whatever Claude Code has: the live session's own title while
+  it runs, `custom-title.json` beside the transcript once it has stopped.
+
+Everything in this section is read out of undocumented Claude Code internals.
+They are treated as enrichment throughout: when a file or field is missing the
+dashboard shows less, never fewer sessions.
+
+---
+
 ## Security
 
 This is a **local, unauthenticated** tool. Anything that can reach the API can
