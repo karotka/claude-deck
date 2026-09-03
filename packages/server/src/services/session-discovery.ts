@@ -419,6 +419,7 @@ export async function discoverLocalSessions(opts: DiscoverOptions = {}): Promise
     if (!registered) continue;
     session.live = true;
     session.pid = registered.pid;
+    if (registered.kind) session.liveKind = registered.kind;
     if (registered.pids.length > 1) session.pids = registered.pids;
     session.status = registered.status === 'busy' ? 'running' : 'idle';
     if (registered.name) session.sessionName = registered.name;
@@ -535,6 +536,7 @@ function placeholderRegisteredSession(entry: ClaudeSession): Session {
     status: entry.status === 'busy' ? 'running' : 'idle',
     pid: entry.pid,
     live: true,
+    liveKind: entry.kind ?? undefined,
     cwd,
     gitBranch: '',
     entrypoint: 'cli',

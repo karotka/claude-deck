@@ -20,6 +20,9 @@ export interface TargetRef {
   label?: string;
 }
 
+/** Why a session cannot be stopped from here, or null when it can. */
+export type StopRefusal = string | null;
+
 export interface CaptureOptions {
   /** Scrollback lines to return. */
   lines?: number;

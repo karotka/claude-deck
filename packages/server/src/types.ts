@@ -80,6 +80,18 @@ export interface Session {
   live?: boolean;
 
   /**
+   * How the live process was started, from Claude Code's own registry:
+   * `interactive` for one in a terminal, `background` for `claude --bg`.
+   *
+   * It decides how a session can be stopped, and the two are not
+   * interchangeable — a background session has `claude stop`, which keeps the
+   * conversation and lets it be resumed, while an interactive one has only the
+   * terminal it is sitting in. Absent when the session is not live, or when the
+   * registry says nothing.
+   */
+  liveKind?: string;
+
+  /**
    * Every live process writing this transcript, newest first. Normally one.
    *
    * Two means the conversation is open twice — reopening a session under tmux

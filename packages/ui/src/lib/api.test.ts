@@ -50,11 +50,14 @@ describe('fetchJson', () => {
     await expect(fetchJson('/api/sessions')).rejects.toThrow(/invalid json/i);
   });
 
-  it('throws ApiError on network failure', async () => {
+  it('throws ApiError on network failure, saying the server is unreachable', async () => {
+    // Status 0 is the one failure with a different answer — start the server —
+    // and the pages branch on it to avoid reporting a dead server as a missing
+    // session. "Failed to fetch" on its own tells nobody anything.
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(fetchJson('/api/sessions')).rejects.toMatchObject({
       status: 0,
-      message: expect.stringMatching(/network error/i),
+      message: expect.stringMatching(/reach the claude-deck server/i),
     });
   });
 });

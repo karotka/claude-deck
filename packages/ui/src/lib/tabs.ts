@@ -72,3 +72,31 @@ export function visibleTabs(
   const stopped = pool.filter(s => s.status === 'stopped').slice(0, STOPPED_TAB_LIMIT);
   return [...running, ...stopped];
 }
+
+/**
+ * `ids` with `held` taken out and put back at `index`.
+ *
+ * `index` counts positions in the list *without* the held item, which is what
+ * a drag actually knows: how many of the others are left of the pointer.
+ * Computing it that way means the answer doesn't change depending on whether
+ * the tab is being dragged left or right.
+ */
+export function reorder(ids: string[], held: string, index: number): string[] {
+  const rest = ids.filter(id => id !== held);
+  const at = Math.max(0, Math.min(index, rest.length));
+  return [...rest.slice(0, at), held, ...rest.slice(at)];
+}
+
+/**
+ * The tab `step` places away from `activeId`, wrapping at both ends.
+ *
+ * Wrapping rather than stopping: cycling is what every tab strip does, and a
+ * shortcut that goes dead at the last tab makes you look to find out why.
+ * Returns null when there is nowhere to go — one tab, or none of them open.
+ */
+export function tabByStep(ids: string[], activeId: string, step: number): string | null {
+  if (ids.length < 2) return null;
+  const at = ids.indexOf(activeId);
+  if (at === -1) return null;
+  return ids[(at + step + ids.length) % ids.length];
+}

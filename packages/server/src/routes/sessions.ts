@@ -11,6 +11,7 @@ import { getTracker } from '../trackers/registry.js';
 import { sessionWorkItems, type Conversation } from '../services/session-work-items.js';
 import type { ParsedMessage, Session } from '../types.js';
 import { isHidden, hideSession, unhideSession } from '../services/hidden-sessions.js';
+import { planStop } from '../services/stop-session.js';
 import { getSessionNote, getSessionNotes, setSessionNote } from '../services/session-notes.js';
 
 /**
@@ -112,7 +113,14 @@ export async function sessionsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return {
-      session: { ...session, hidden: isHidden(session.id), note: getSessionNote(session.id) ?? null },
+      session: {
+        ...session,
+        hidden: isHidden(session.id),
+        note: getSessionNote(session.id) ?? null,
+        // What Stop would do, so the dialog can say it without the browser
+        // reimplementing the decision.
+        stopMethod: session.live ? planStop(session) : null,
+      },
     };
   });
 

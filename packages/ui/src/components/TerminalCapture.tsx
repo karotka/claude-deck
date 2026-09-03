@@ -326,6 +326,12 @@ export function TerminalCapture({
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // A chord with a modifier belongs to the app or the browser, not the
+    // session. Without this, ⌘⇧← switched tab *and* sent a Left arrow to the
+    // TUI on the way out, because an empty prompt forwards bare arrows.
+    if (e.metaKey || e.ctrlKey || e.altKey) {
+      if (e.key.startsWith('Arrow')) return;
+    }
     // Ctrl-C interrupts the session rather than copying — there is nothing to
     // copy from an empty prompt, and interrupting is the thing you need in a
     // hurry. With a selection, let the browser copy it.

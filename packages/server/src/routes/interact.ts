@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getCachedSession } from '../services/session-discovery.js';
+import { stopSession } from '../services/stop-session.js';
 import { transportFor } from '../providers/registry.js';
 
 export async function interactRoutes(app: FastifyInstance): Promise<void> {
@@ -35,6 +36,43 @@ export async function interactRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return reply.status(500).send({
         error: err instanceof Error ? err.message : 'Failed to send',
+      });
+    }
+  });
+
+  /**
+   * Stop a live session.
+   *
+   * Three cases, and they are genuinely different rather than three ways of
+   * saying "kill":
+   *
+   * - **Background** (`claude --bg`) — `claude stop <id>` is Claude Code's own
+   *   command for it. The conversation is kept and the session can be resumed,
+   *   which makes this the cheap, reversible one.
+   * - **A tmux session this app launched** — killing the window is what closing
+   *   that terminal would do. The transcript survives, so Reopen here brings it
+   *   back.
+   * - **Anything else with a live process** — a plain SIGTERM, the same signal
+   *   closing its terminal would send. Claude Code writes its transcript as it
+   *   goes, so nothing is lost but an answer already in flight.
+   *
+   * No SIGKILL and no `claude rm`. A stop that cannot be undone is a different
+   * feature and should be asked for by name.
+   */
+  app.post('/api/sessions/:id/stop', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const session = getCachedSession(id);
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+    if (!session.live) {
+      return reply.status(400).send({ error: 'This session is not running.' });
+    }
+
+    try {
+      const how = await stopSession(session);
+      return { ok: true, how };
+    } catch (err) {
+      return reply.status(500).send({
+        error: err instanceof Error ? err.message : 'Failed to stop',
       });
     }
   });

@@ -12,8 +12,13 @@ export async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit)
   try {
     res = await fetch(input, init);
   } catch (err) {
+    // Status 0 means the request never reached a server, which is a different
+    // thing from every other failure here and has a different answer: start the
+    // server. The browser's own wording for it is "Failed to fetch", which
+    // tells nobody anything, so it goes at the end rather than the front.
     throw new ApiError(
-      `Network error: ${err instanceof Error ? err.message : String(err)}`,
+      "Can't reach the claude-deck server. Is it still running "
+        + `(npm run dev)? — ${err instanceof Error ? err.message : String(err)}`,
       0,
     );
   }
@@ -92,6 +97,12 @@ export interface Session {
    * build that doesn't write the registry means "unknown", not "stopped".
    */
   live?: boolean;
+  /** 'interactive' or 'background', from Claude Code's registry. Decides how
+      the session can be stopped — see the server's stop-session service. */
+  liveKind?: string;
+  /** What Stop would do to this session, decided by the server. Null when
+      there is nothing running to stop. */
+  stopMethod?: 'claude stop' | 'tmux kill-session' | 'SIGTERM' | null;
   /**
    * Every live process writing this transcript, newest first. Present only when
    * there is more than one — the conversation is open twice.
@@ -212,8 +223,10 @@ export async function saveSessionNote(id: string, note: string): Promise<void> {
 }
 
 export async function fetchSession(id: string): Promise<Session> {
-  const res = await fetch(`${BASE}/api/sessions/${id}`);
-  const data = await res.json();
+  // Through fetchJson, so an unreachable server and a missing session are
+  // distinguishable. Raw fetch here meant `res.json()` threw on the empty body
+  // of a failed request, and the caller could only conclude "no such session".
+  const data = await fetchJson<{ session: Session }>(`${BASE}/api/sessions/${id}`);
   return data.session;
 }
 

@@ -11,6 +11,7 @@ import {
   type Session,
   type WorkItem,
   type TagMention,
+  ApiError,
 } from '../lib/api';
 import { migrateLegacyNotes, mergePendingNotes, type PendingNotes } from '../lib/notes';
 import { isInteractive } from '../lib/tabs';
@@ -22,7 +23,7 @@ import { SessionTabBar } from '../components/SessionTabBar';
 import { WorkItemBadge } from '../components/WorkItemBadge';
 import { WorkItemRow } from '../components/WorkItemRow';
 import { SourceBadge } from '../components/SourceBadge';
-import { timeAgo, projectName } from '../lib/utils';
+import { timeAgo } from '../lib/utils';
 import { useAppConfig, capturePollMs } from '../hooks/useAppConfig';
 
 const INTERACTIVE_ONLY_KEY = 'claude-monitor-tabs-interactive-only';
@@ -33,6 +34,11 @@ export function SessionDetail() {
   const [session, setSession] = useState<Session | null>(null);
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  // Why the session isn't on screen, when it isn't. A dead server and a session
+  // that does not exist look identical from here otherwise, and the page used to
+  // report the second for both — so a stopped server read as "Session not
+  // found", which is wrong and no help at all.
+  const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [activeTab, setActiveTab] = useState<'conversation' | 'terminal'>('terminal');
   // How fast to poll the terminal is the transport's call, not this page's — a
   // streamed remote pane is served from server memory and wants a much shorter
@@ -57,6 +63,7 @@ export function SessionDetail() {
   // the only way to make a session someone started in their own terminal
   // typeable from here.
   const [resuming, setResuming] = useState(false);
+  const [acting, setActing] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [workItems, setWorkItems] = useState<Record<string, WorkItem>>({});
 
@@ -68,6 +75,59 @@ export function SessionDetail() {
   // The one the session is *about*. Taken from the same field the server marks
   // as primary, so the two cannot disagree about which entry to highlight.
   const primaryTag = session?.tag ?? null;
+
+  const drive = async (key: string) => {
+    if (!id || acting) return;
+    setActing(true);
+    try {
+      await fetch(`/api/sessions/${id}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+    } catch { /* the pane will show whether it landed */ }
+    setActing(false);
+  };
+
+  const interrupt = () => drive('Escape');
+
+  /**
+   * What stopping this session will actually do, said before it happens.
+   *
+   * "Stop" means three different things depending on how the session was
+   * started, and the difference is exactly what someone needs to know before
+   * clicking: one of them is reversible and two of them close a terminal.
+   */
+  const stopPlan = (): string => {
+    switch (session?.stopMethod) {
+      case 'claude stop':
+        return `Stop this background session?\n\nRuns \`claude stop ${session.id.slice(0, 8)}\`. `
+          + 'The conversation is kept and you can resume it later.';
+      case 'tmux kill-session':
+        return `Stop this session?\n\nCloses the tmux session ${session.target?.ref}, which this `
+          + 'dashboard started. The transcript is kept, so Reopen here brings it back.';
+      case 'SIGTERM':
+        return 'Stop this session?\n\nSends SIGTERM to the process — the same signal closing '
+          + 'its terminal sends. The transcript is kept; an answer in flight is lost.';
+      default:
+        return 'Stop this session?\n\nThere is no process here to stop, so this may do nothing.';
+    }
+  };
+
+  const stop = async () => {
+    if (!id || acting || !window.confirm(stopPlan())) return;
+    setActing(true);
+    try {
+      const res = await fetch(`/api/sessions/${id}/stop`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setResumeError(body.error || 'Failed to stop the session.');
+      }
+    } catch {
+      setResumeError('Failed to stop the session.');
+    }
+    setActing(false);
+  };
 
   const handleResume = async () => {
     if (!session) return;
@@ -126,6 +186,9 @@ export function SessionDetail() {
     ]).then(([s, all]) => {
       setSession(s);
       setAllSessions(all);
+      setLoadError(null);
+    }).catch((err: unknown) => {
+      setLoadError(err instanceof ApiError ? err : new ApiError(String(err), 0));
     });
   };
 
@@ -202,11 +265,22 @@ export function SessionDetail() {
   }
 
   if (!session) {
+    // Unreachable is worth saying out loud, and it is fixable by the person
+    // reading it; the poll keeps running, so the page recovers on its own once
+    // the server is back.
+    if (loadError?.status === 0) {
+      return (
+        <div className="p-6 space-y-2">
+          <div className="text-sm text-red-400">{loadError.message}</div>
+          <div className="text-xs text-muted-foreground">
+            Retrying every 5 seconds — this page comes back on its own.
+          </div>
+        </div>
+      );
+    }
     return <div className="p-6 text-muted-foreground">Session not found.</div>;
   }
 
-  const statusColor = session.status === 'running' ? 'bg-green-500' :
-    session.status === 'idle' ? 'bg-yellow-500' : 'bg-gray-500';
   // The same test the tab bar filters on, so "Interactive only" and the
   // Terminal button can never disagree about what a session can do.
   const canInteract = isInteractive(session);
@@ -221,20 +295,116 @@ export function SessionDetail() {
         notes={notes}
       />
 
-      {/* Top bar: back link + session header */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 sm:px-4 py-2 border-b border-border bg-muted/20">
-        <Link to="/" className="text-xs text-muted-foreground hover:text-foreground">
+      {/*
+        Top bar, in three groups separated by rules: where you can go, what you
+        can do, and what this session is.
+
+        It grew the other way round — identity first, actions pushed to
+        whichever edge had room, the checkbox and the buttons each claiming
+        `ml-auto` so they fought over the same gap. Reading it meant scanning
+        the whole width. Now the things you click are together and always in
+        the same place, and the things you read follow them.
+      */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 border-b border-border bg-muted/20">
+        <Link to="/" className="text-xs text-muted-foreground hover:text-foreground whitespace-nowrap">
           Overview
         </Link>
-        <span className="text-muted-foreground/30">|</span>
-        <span className={`inline-block h-2 w-2 rounded-full ${statusColor}`} />
-        <span className="font-semibold text-sm">{projectName(session.projectPath)}</span>
-        {session.target?.kind === 'tmux' ? (
-          <AttachCommand tmuxSession={session.target.ref} />
-        ) : (
-          <SourceBadge source={session.source} remote={session.remote} />
+        <Rule />
+
+        {canInteract && (
+          <>
+            <button
+              onClick={() => { setActiveTab('terminal'); setShowInfo(false); }}
+              className={`text-xs px-2 py-1 rounded ${activeTab === 'terminal' && !showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
+            >
+              Terminal
+            </button>
+            <button
+              onClick={() => { setActiveTab('conversation'); setShowInfo(false); }}
+              className={`text-xs px-2 py-1 rounded ${activeTab === 'conversation' && !showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
+            >
+              Conversation
+            </button>
+            <Rule />
+            {/* Controls that drive the session rather than the view. Kept a
+                rule away from the view switch: one of them ends the session,
+                and it should not sit flush against the button you press all
+                day. */}
+            <button
+              onClick={interrupt}
+              disabled={acting}
+              title="Send Escape — stops what Claude is doing without ending the session"
+              className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-accent hover:text-yellow-400 disabled:opacity-40"
+            >
+              Interrupt
+            </button>
+            <button
+              onClick={stop}
+              disabled={acting}
+              title="End the session. What that means depends on how it was started — you'll be told before it happens."
+              className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground hover:bg-accent hover:text-red-400 disabled:opacity-40"
+            >
+              Stop
+            </button>
+          </>
         )}
-        <span className="hidden sm:inline text-xs text-muted-foreground">{session.id.slice(0, 12)}</span>
+
+        {/* An action, so it sits with the actions. */}
+        {session.target?.kind === 'tmux'
+          ? <AttachCommand tmuxSession={session.target.ref} />
+          : <SourceBadge source={session.source} remote={session.remote} />}
+
+        {!canInteract && (
+          <>
+            <button
+              onClick={handleResume}
+              disabled={resuming || !!session.live}
+              title={
+                session.live
+                  ? 'Running in a terminal already. Reopening would start a second Claude Code on the same conversation, and the two would answer independently.'
+                  : `Runs \`claude --resume ${session.id.slice(0, 8)}\` in a tmux session here, so you can type into it.`
+              }
+              className="text-xs px-2 py-1 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {resuming ? 'Reopening…' : 'Reopen here'}
+            </button>
+            {session.live && (
+              <span className="text-[11px] text-muted-foreground">
+                running in a terminal — exit it there first
+              </span>
+            )}
+          </>
+        )}
+
+        <button
+          onClick={() => setShowInfo(v => !v)}
+          className={`lg:hidden text-xs px-2 py-1 rounded ${showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
+        >
+          Info
+        </button>
+
+        <label
+          // "Interactive only" said nothing about what it filters. It hides
+          // tabs for sessions with no live terminal — everything not running
+          // under tmux — which is most of them until you reopen one.
+          title="Hide tabs for sessions with no terminal to type into (anything not running under tmux)"
+          className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap"
+        >
+          <input
+            type="checkbox"
+            checked={interactiveOnly}
+            onChange={toggleInteractiveOnly}
+            className="rounded border-border"
+          />
+          Typeable only
+        </label>
+
+        {/* No identity group. The folder, the branch and the working directory
+            are all in Session Info, the tab strip names the session and marks
+            it, and a status dot with no label was the very thing that meant
+            nothing to anyone. Saying it a second time here only competed with
+            the controls for the width. */}
+
         {editingNote ? (
           <input
             autoFocus
@@ -246,7 +416,7 @@ export function SessionDetail() {
             }}
             onBlur={commitNote}
             placeholder="Note for this session..."
-            className="bg-transparent outline-none border-b border-primary/40 focus:border-primary text-xs py-0.5 w-64"
+            className="ml-auto bg-transparent outline-none border-b border-primary/40 focus:border-primary text-xs py-0.5 w-64"
           />
         ) : (
           <button
@@ -254,76 +424,21 @@ export function SessionDetail() {
             onClick={startEditNote}
             title={note ? 'Click to edit note' : 'Click to add a note'}
             className={
-              'text-xs text-left truncate max-w-[140px] sm:max-w-[260px] hover:text-foreground transition-colors ' +
+              'ml-auto text-xs text-right truncate max-w-[140px] sm:max-w-[300px] hover:text-foreground transition-colors ' +
               (note ? 'italic text-muted-foreground' : 'text-muted-foreground/40')
             }
           >
             {note ?? '+ note'}
           </button>
         )}
-        <label
-          // "Interactive only" said nothing about what it filters. It hides
-          // tabs for sessions with no live terminal — everything not running
-          // under tmux — which is most of them until you reopen one.
-          title="Hide tabs for sessions with no terminal to type into (anything not running under tmux)"
-          className="ml-auto hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap"
-        >
-          <input
-            type="checkbox"
-            checked={interactiveOnly}
-            onChange={toggleInteractiveOnly}
-            className="rounded border-border"
-          />
-          Typeable only
-        </label>
-        <div className="ml-auto sm:ml-0 flex gap-1">
-          {!canInteract && (
-            <>
-              <button
-                onClick={handleResume}
-                disabled={resuming || !!session.live}
-                title={
-                  session.live
-                    ? 'Running in a terminal already. Reopening would start a second Claude Code on the same conversation, and the two would answer independently.'
-                    : `Runs \`claude --resume ${session.id.slice(0, 8)}\` in a tmux session here, so you can type into it.`
-                }
-                className="text-xs px-2 py-1 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {resuming ? 'Reopening…' : 'Reopen here'}
-              </button>
-              {session.live && (
-                <span className="self-center text-[11px] text-muted-foreground ml-1">
-                  running in a terminal — exit it there first
-                </span>
-              )}
-            </>
-          )}
-          {canInteract && (
-            <>
-              <button
-                onClick={() => { setActiveTab('terminal'); setShowInfo(false); }}
-                className={`text-xs px-2 py-1 rounded ${activeTab === 'terminal' && !showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
-              >
-                Terminal
-              </button>
-              <button
-                onClick={() => { setActiveTab('conversation'); setShowInfo(false); }}
-                className={`text-xs px-2 py-1 rounded ${activeTab === 'conversation' && !showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
-              >
-                Conversation
-              </button>
-            </>
-          )}
-          <button
-            onClick={() => setShowInfo(v => !v)}
-            className={`lg:hidden text-xs px-2 py-1 rounded ${showInfo ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}
-          >
-            Info
-          </button>
-        </div>
       </div>
 
       {/* Main content */}
+      {loadError?.status === 0 && (
+        <div className="mx-2 sm:mx-4 mb-1 text-xs text-red-400 bg-red-950/20 border border-red-800 rounded-md p-2">
+          {loadError.message} Showing the last state it reported.
+        </div>
+      )}
       {resumeError && (
         <div className="mx-2 sm:mx-4 mb-1 text-xs text-red-400 bg-red-950/20 border border-red-800 rounded-md p-2">
           {resumeError}
@@ -465,6 +580,11 @@ function InfoRow({ label, value }: { label: string; value: string }) {
  * name, which is exactly what the command carries. Attaching gives you the same
  * process the browser is driving, not a copy.
  */
+/** The divider between the bar's three groups. */
+function Rule() {
+  return <span className="text-muted-foreground/25 select-none">|</span>;
+}
+
 function AttachCommand({ tmuxSession }: { tmuxSession: string }) {
   const [copied, setCopied] = useState(false);
   const command = `tmux attach -t ${tmuxSession}`;
@@ -480,14 +600,18 @@ function AttachCommand({ tmuxSession }: { tmuxSession: string }) {
     }
   };
 
+  // Six characters instead of thirty. The command was spelled out in full
+  // across the bar, which is a lot of permanent width for a line nobody reads
+  // — you copy it, once, and paste it into a terminal. The word says what the
+  // click does and the tooltip carries the command itself.
   return (
     <button
       type="button"
       onClick={copy}
-      title="Copy — attaching gives you this same session in your terminal, in sync with the browser"
-      className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border hover:text-foreground hover:border-foreground/40 whitespace-nowrap"
+      title={`${command}\n\nCopy. Attaching gives you this same session in your terminal, in sync with the browser.`}
+      className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border hover:text-foreground hover:border-foreground/40 whitespace-nowrap"
     >
-      {copied ? 'copied' : command}
+      {copied ? 'copied' : 'attach'}
     </button>
   );
 }

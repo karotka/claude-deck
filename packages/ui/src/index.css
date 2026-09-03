@@ -29,3 +29,22 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  /*
+   * A scroll box with no scrollbar drawn.
+   *
+   * For the tab strip: the bar is barely taller than a tab, so an overlay
+   * scrollbar lands on top of the last tabs and eats the clicks meant for
+   * them — you scroll right to reach a session and then cannot open it. The
+   * strip still scrolls by wheel, trackpad and drag; it just doesn't spend a
+   * quarter of its height saying so.
+   */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isInteractive, visibleTabs, STOPPED_TAB_LIMIT } from './tabs';
+import { isInteractive, visibleTabs, STOPPED_TAB_LIMIT, reorder, tabByStep } from './tabs';
 import type { Session } from './api';
 
 const ACTIVE_ID = 'active-session';
@@ -98,5 +98,52 @@ describe('closed tabs', () => {
     const sessions = [session({ id: 'a' }), session({ id: 'b' })];
     expect(visibleTabs(sessions, { activeId: 'a', interactiveOnly: false }).map(s => s.id))
       .toEqual(['a', 'b']);
+  });
+});
+
+describe('reorder', () => {
+  it('moves a tab to the right', () => {
+    expect(reorder(['a', 'b', 'c', 'd'], 'a', 2)).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it('moves a tab to the left', () => {
+    expect(reorder(['a', 'b', 'c', 'd'], 'd', 1)).toEqual(['a', 'd', 'b', 'c']);
+  });
+
+  it('counts positions in the list without the held tab', () => {
+    // Index 0 is "before everything else", whichever side it came from — the
+    // same number has to mean the same place dragging either way.
+    expect(reorder(['a', 'b', 'c'], 'c', 0)).toEqual(['c', 'a', 'b']);
+    expect(reorder(['a', 'b', 'c'], 'a', 0)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('clamps an index past the end', () => {
+    expect(reorder(['a', 'b', 'c'], 'a', 99)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('leaves the list alone when the tab is not in it', () => {
+    expect(reorder(['a', 'b'], 'z', 1)).toEqual(['a', 'z', 'b']);
+  });
+});
+
+describe('tabByStep', () => {
+  it('steps right and left', () => {
+    expect(tabByStep(['a', 'b', 'c'], 'b', 1)).toBe('c');
+    expect(tabByStep(['a', 'b', 'c'], 'b', -1)).toBe('a');
+  });
+
+  it('wraps at both ends', () => {
+    // A shortcut that goes dead on the last tab makes you look to find out why.
+    expect(tabByStep(['a', 'b', 'c'], 'c', 1)).toBe('a');
+    expect(tabByStep(['a', 'b', 'c'], 'a', -1)).toBe('c');
+  });
+
+  it('has nowhere to go with one tab', () => {
+    expect(tabByStep(['a'], 'a', 1)).toBeNull();
+    expect(tabByStep([], 'a', 1)).toBeNull();
+  });
+
+  it('does nothing when the open session has no tab in the strip', () => {
+    expect(tabByStep(['a', 'b'], 'zz', 1)).toBeNull();
   });
 });

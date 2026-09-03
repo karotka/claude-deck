@@ -31,6 +31,8 @@ configured.
 > discovery, the JSONL parsing, the cost model and the remote-transport latency
 > work are his; this fork generalizes the parts that assumed one company's Jira,
 > Docker and VM setup.
+>
+> Released under the MIT License; see `LICENSE`.
 
 ---
 
