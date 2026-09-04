@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { splitPane } from '../lib/terminal';
+import { loadHistory, rememberPrompt, stepHistory } from '../lib/prompt-history';
 import { parseAnsi, type AnsiLine } from '../lib/ansi';
 import { cn } from '../lib/utils';
 import { uploadAttachment } from '../lib/api';
@@ -19,6 +20,14 @@ interface Props {
 }
 
 const DEFAULT_LINES = 1000;
+/**
+ * Wheel travel that counts as one tick, and the most ticks one request carries.
+ * The cap keeps a flick from scrolling to the far end of the transcript; it
+ * mirrors the server's own limit, which is the one that actually binds.
+ */
+const WHEEL_NOTCH_PX = 40;
+const MAX_WHEEL_TICKS = 12;
+
 const MAX_LINES = 50000;
 const DEFAULT_POLL_MS = 2000;
 
@@ -49,6 +58,11 @@ export function TerminalCapture({
   const outputRef = useRef<HTMLPreElement>(null);
   const userScrolledUpRef = useRef(false);
   const splitOverheadRef = useRef(0);
+  const [history, setHistory] = useState<string[]>(() => loadHistory(sessionId));
+  // -1 is "not in the history": the box holds whatever you were typing, and
+  // `draftRef` is where it waits while you look back through what you sent.
+  const historyIndexRef = useRef(-1);
+  const draftRef = useRef('');
   const wheelAccumRef = useRef(0);
   const wheelInFlightRef = useRef(false);
 
@@ -99,6 +113,12 @@ export function TerminalCapture({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    setHistory(loadHistory(sessionId));
+    historyIndexRef.current = -1;
+    draftRef.current = '';
+  }, [sessionId]);
 
   useEffect(() => {
     fetchCapture();
@@ -163,6 +183,9 @@ export function TerminalCapture({
         body: JSON.stringify({ text: input }),
       });
       if (res.ok) {
+        setHistory(rememberPrompt(sessionId, input));
+        historyIndexRef.current = -1;
+        draftRef.current = '';
         updateInput('');
         // A remote send returns the pane it produced; rendering it immediately
         // is what removes the poll-interval wait from a keystroke.
@@ -206,15 +229,44 @@ export function TerminalCapture({
    * says "Sending…", which is not what a scroll should do to the thing you are
    * typing into.
    */
-  const sendWheel = async (key: 'WheelUp' | 'WheelDown') => {
+  const sendWheel = async (key: 'WheelUp' | 'WheelDown', count: number) => {
     try {
       const res = await fetch(`/api/sessions/${sessionId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({ key, count }),
       });
       if (res.ok && !(await applyResponsePane(res))) await fetchCapture();
     } catch { /* a transport that won't scroll is not worth a message */ }
+  };
+
+  /**
+   * Turn accumulated wheel movement into requests, one at a time.
+   *
+   * The first version sent a fixed three ticks and *dropped* anything that
+   * arrived while a request was in flight, which is why scrolling lurched:
+   * most of a gesture went in the bin and what survived moved three lines at a
+   * go. Nothing is dropped now — it is banked, and whatever accumulated during
+   * a round trip goes out in the next one, so the pane travels as far as the
+   * fingers asked. One request at a time still, since two in flight would
+   * arrive in whatever order tmux felt like.
+   *
+   * The bank is capped. Without that a flick keeps paying out long after the
+   * gesture ends, which is its own kind of wrong.
+   */
+  const pumpWheel = async () => {
+    if (wheelInFlightRef.current) return;
+    const ticks = Math.trunc(wheelAccumRef.current / WHEEL_NOTCH_PX);
+    if (ticks === 0) return;
+    const count = Math.min(Math.abs(ticks), MAX_WHEEL_TICKS);
+    wheelAccumRef.current -= Math.sign(ticks) * count * WHEEL_NOTCH_PX;
+    wheelInFlightRef.current = true;
+    try {
+      await sendWheel(ticks < 0 ? 'WheelUp' : 'WheelDown', count);
+    } finally {
+      wheelInFlightRef.current = false;
+      void pumpWheel();
+    }
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLElement>) => {
@@ -224,17 +276,12 @@ export function TerminalCapture({
     // browser's scrolling is the right one and this stays out of the way.
     if (el && el.scrollHeight > el.clientHeight + 1) return;
     if (!canInteract) return;
-    // A trackpad emits many small deltas per gesture; a notch is one turn.
-    wheelAccumRef.current += e.deltaY;
-    const NOTCH = 40;
-    if (Math.abs(wheelAccumRef.current) < NOTCH) return;
-    const key = wheelAccumRef.current < 0 ? 'WheelUp' : 'WheelDown';
-    wheelAccumRef.current = 0;
-    // One turn in flight at a time. Without this a flick queues a dozen round
-    // trips and the pane keeps moving long after the fingers stop.
-    if (wheelInFlightRef.current) return;
-    wheelInFlightRef.current = true;
-    void sendWheel(key).finally(() => { wheelInFlightRef.current = false; });
+    // A trackpad emits many small deltas per gesture; the notch is the unit
+    // they add up to. Clamped so a flick cannot bank more than two requests'
+    // worth of travel and keep scrolling after the fingers stop.
+    const cap = WHEEL_NOTCH_PX * MAX_WHEEL_TICKS * 2;
+    wheelAccumRef.current = Math.max(-cap, Math.min(cap, wheelAccumRef.current + e.deltaY));
+    void pumpWheel();
   };
 
   // Send the buffered input followed by a Tab keystroke (no Enter), so the
@@ -325,6 +372,12 @@ export function TerminalCapture({
     void attachFiles(files);
   };
 
+  /** Editing the recalled text makes it yours; the arrows start over from it. */
+  const handleInputChange = (value: string) => {
+    historyIndexRef.current = -1;
+    updateInput(value);
+  };
+
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // A chord with a modifier belongs to the app or the browser, not the
     // session. Without this, ⌘⇧← switched tab *and* sent a Left arrow to the
@@ -354,8 +407,33 @@ export function TerminalCapture({
       else sendTab();
       return;
     }
-    if (e.key === 'ArrowUp') { e.preventDefault(); sendKey('Up'); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); sendKey('Down'); return; }
+    /*
+     * Up and Down walk what you have sent from this box, the way a shell does.
+     *
+     * They used to go straight to the session, which sounds right and was not:
+     * Claude Code's own up arrow recalls a prompt into the *TUI's* input, which
+     * this box can neither see nor send, so pressing it here filled a field
+     * nobody could reach. The history that this box can put back is the one it
+     * wrote.
+     *
+     * The arrows are not forwarded to the session at all. A menu in the TUI
+     * takes a number and Enter, which is the whole reason the plain key was
+     * free to spend on this.
+     */
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (history.length === 0) return;
+      // Entering the history parks the unsent draft so Down can hand it back.
+      if (historyIndexRef.current === -1) draftRef.current = input;
+      const next = stepHistory(
+        history.length,
+        historyIndexRef.current,
+        e.key === 'ArrowUp' ? 'older' : 'newer',
+      );
+      historyIndexRef.current = next;
+      updateInput(next === -1 ? draftRef.current : history[next]);
+      return;
+    }
     if (e.key === 'Escape') { e.preventDefault(); sendKey('Escape'); return; }
     // Left/Right move the caret while there is text to move through, and drive
     // the TUI's own selection when there isn't. The nav buttons used to be the
@@ -479,12 +557,13 @@ export function TerminalCapture({
                 el.style.height = `${el.scrollHeight}px`;
               }}
               value={input}
-              onChange={e => updateInput(e.target.value)}
+              onChange={e => handleInputChange(e.target.value)}
               onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
               placeholder={
                 uploading ? 'Attaching…' : sending ? 'Sending…' : 'Type a message'
               }
+              title="Enter sends · Shift+Enter newline · ↑ ↓ what you sent before · Shift+Tab permission mode"
               // text-base below sm keeps iOS from zooming the page on focus.
               className="flex-1 min-w-0 bg-transparent resize-none outline-none text-base sm:text-[13px] font-mono placeholder:text-foreground/25"
             />

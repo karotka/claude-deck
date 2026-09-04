@@ -51,7 +51,8 @@ export interface SessionTransport {
   kind: string;
   capture(ref: string, opts: CaptureOptions): Promise<string>;
   send(ref: string, text: string, appendEnter: boolean): Promise<string | null>;
-  sendKey(ref: string, key: string): Promise<string | null>;
+  /** `count` applies to wheel turns; other keys are sent once. */
+  sendKey(ref: string, key: string, count?: number): Promise<string | null>;
   /**
    * Read a transcript that lives where this transport reaches rather than on
    * this host, given the path the provider recorded as `remoteJsonlPath`.

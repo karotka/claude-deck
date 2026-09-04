@@ -29,8 +29,8 @@ export const tmuxTransport: SessionTransport = {
     await sendKeys(ref, text, appendEnter);
     return null;
   },
-  async sendKey(ref, key) {
-    await sendKey(ref, key);
+  async sendKey(ref, key, count) {
+    await sendKey(ref, key, count);
     return null;
   },
 };
@@ -43,8 +43,8 @@ export const dockerTransport: SessionTransport = {
     await dockerExecSend(ref, text, appendEnter);
     return null;
   },
-  async sendKey(ref, key) {
-    await dockerExecSendKey(ref, key);
+  async sendKey(ref, key, count) {
+    await dockerExecSendKey(ref, key, count);
     return null;
   },
   readTranscript: (ref, remotePath) => readContainerSessionFull(ref, remotePath),

@@ -245,8 +245,9 @@ export async function dockerExecSend(
 export async function dockerExecSendKey(
   containerName: string,
   key: string,
+  count = 1,
 ): Promise<void> {
-  const wheel = wheelBytes(key);
+  const wheel = wheelBytes(key, count);
   if (!wheel && !ALLOWED_RAW_KEYS.has(key)) {
     throw new Error(`Disallowed key: ${key}`);
   }

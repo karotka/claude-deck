@@ -6,7 +6,9 @@ import { transportFor } from '../providers/registry.js';
 export async function interactRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/sessions/:id/send', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { text, key, noEnter } = request.body as { text?: string; key?: string; noEnter?: boolean };
+    const { text, key, noEnter, count } = request.body as {
+      text?: string; key?: string; noEnter?: boolean; count?: number;
+    };
 
     if (!text && !key) {
       return reply.status(400).send({ error: 'text or key is required' });
@@ -30,7 +32,7 @@ export async function interactRoutes(app: FastifyInstance): Promise<void> {
       // The remote one does: waiting for the next poll instead would be most of
       // the delay a remote keystroke appears to have. Null means "poll as usual".
       const content = key
-        ? await transport.sendKey(session.target.ref, key)
+        ? await transport.sendKey(session.target.ref, key, count)
         : await transport.send(session.target.ref, text!, !noEnter);
       return content === null ? { ok: true } : { ok: true, content };
     } catch (err) {

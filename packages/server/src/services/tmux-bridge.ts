@@ -229,24 +229,35 @@ export const ALLOWED_RAW_KEYS = new Set([
  * the frame to pan over. Scrolling has to be the application's, not the
  * terminal's.
  *
- * Three ticks per turn is the usual terminal notch, and the coordinates are the
- * pane's top-left: the TUI scrolls its transcript wherever the pointer is, so
- * the corner saves a round trip asking how big the pane is.
+ * The coordinates are the pane's top-left: the TUI scrolls its transcript
+ * wherever the pointer is, so the corner saves a round trip asking how big the
+ * pane is.
+ *
+ * How many ticks is the caller's business. It was three — a terminal notch —
+ * which made every turn of the wheel a three-line jump, and the browser then
+ * dropped whatever arrived while a turn was in flight, so a gesture came out as
+ * a few big lurches with gaps between them. One tick is the unit now and the
+ * browser says how many it wants, which lets a slow scroll move a line at a
+ * time and a fast one still cover ground in a single round trip.
  */
 const WHEEL_SEQUENCES: Record<string, string> = {
   WheelUp: '\x1b[<64;1;1M',
   WheelDown: '\x1b[<65;1;1M',
 };
-const TICKS_PER_TURN = 3;
 
-/** The bytes for a wheel turn, or null if `key` is not one. */
-export function wheelBytes(key: string): string | null {
+/** Ticks one request may carry. A flick should not scroll to the far end. */
+export const MAX_WHEEL_TICKS = 12;
+
+/** The bytes for `count` wheel ticks, or null if `key` is not a wheel turn. */
+export function wheelBytes(key: string, count = 1): string | null {
   const seq = WHEEL_SEQUENCES[key];
-  return seq ? seq.repeat(TICKS_PER_TURN) : null;
+  if (!seq) return null;
+  const n = Math.min(Math.max(Math.floor(count) || 1, 1), MAX_WHEEL_TICKS);
+  return seq.repeat(n);
 }
 
-export async function sendKey(sessionName: string, key: string): Promise<void> {
-  const wheel = wheelBytes(key);
+export async function sendKey(sessionName: string, key: string, count = 1): Promise<void> {
+  const wheel = wheelBytes(key, count);
   if (!wheel && !ALLOWED_RAW_KEYS.has(key)) {
     throw new Error(`Disallowed key: ${key}`);
   }

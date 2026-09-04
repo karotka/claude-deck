@@ -207,10 +207,31 @@ describe('wheel forwarding', () => {
     expect(sends()[0].args.join(' ')).toContain('[<65;1;1M');
   });
 
-  it('sends a notch of three ticks, as a terminal does', async () => {
+  it('sends one tick by default, so the caller sets the step', async () => {
+    // It was a fixed three, which made every turn of the wheel a three-line
+    // jump — half of why scrolling lurched.
     await sendKey('sess', 'WheelUp');
     const bytes = sends()[0].args[sends()[0].args.length - 1];
-    expect(bytes.split('[<64').length - 1).toBe(3);
+    expect(bytes.split('[<64').length - 1).toBe(1);
+  });
+
+  it('carries as many ticks as the caller asked for, in one call', async () => {
+    await sendKey('sess', 'WheelUp', 5);
+    expect(sends()).toHaveLength(1);
+    const bytes = sends()[0].args[sends()[0].args.length - 1];
+    expect(bytes.split('[<64').length - 1).toBe(5);
+  });
+
+  it('caps a flick so it cannot scroll to the far end', async () => {
+    await sendKey('sess', 'WheelUp', 500);
+    const bytes = sends()[0].args[sends()[0].args.length - 1];
+    expect(bytes.split('[<64').length - 1).toBe(12);
+  });
+
+  it('treats a nonsense count as one tick', async () => {
+    await sendKey('sess', 'WheelUp', 0);
+    const bytes = sends()[0].args[sends()[0].args.length - 1];
+    expect(bytes.split('[<64').length - 1).toBe(1);
   });
 
   it('still refuses a key that is neither allowed nor a wheel turn', async () => {
