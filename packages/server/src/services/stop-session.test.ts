@@ -3,14 +3,21 @@ import { stopSession, backgroundHandle, isOwnTmuxSession, isBackground } from '.
 import type { StopDeps } from './stop-session.js';
 import type { Session } from '../types.js';
 
-function deps(): StopDeps & { runs: [string, string[]][]; kills: [number, string][] } {
+function deps(): StopDeps & {
+  runs: [string, string[]][];
+  kills: [number, string][];
+  forgotten: string[];
+} {
   const runs: [string, string[]][] = [];
   const kills: [number, string][] = [];
+  const forgotten: string[] = [];
   return {
     runs,
     kills,
+    forgotten,
     run: async (file, args) => { runs.push([file, args]); },
     kill: (pid, signal) => { kills.push([pid, signal]); },
+    forget: async (id) => { forgotten.push(id); },
   };
 }
 
@@ -116,5 +123,28 @@ describe('stopSession with the registry spelling', () => {
     const how = await stopSession(session({ liveKind: 'bg' }), d);
     expect(how).toBe('claude stop');
     expect(d.runs).toEqual([['claude', ['stop', 'eb1c3b37']]]);
+  });
+});
+
+describe('stopping a session this app launched', () => {
+  it('forgets it as well as killing the pane', async () => {
+    // The card is on the board because the registry says so, not because a
+    // process exists. Killing the pane alone left one that could be neither
+    // opened nor removed.
+    const d = deps();
+    await stopSession(
+      session({ liveKind: 'interactive', target: { kind: 'tmux', ref: 'cm-eb2c5f99' } }),
+      d,
+    );
+    expect(d.forgotten).toEqual(['eb1c3b37-7810-48a1-9f52-6162d6ceece0']);
+  });
+
+  it('forgets nothing when the pane is not this app\'s', async () => {
+    const d = deps();
+    await stopSession(
+      session({ liveKind: 'interactive', target: { kind: 'tmux', ref: 'radius' } }),
+      d,
+    );
+    expect(d.forgotten).toEqual([]);
   });
 });

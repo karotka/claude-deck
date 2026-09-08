@@ -17,6 +17,7 @@ import { migrateLegacyNotes, mergePendingNotes, type PendingNotes } from '../lib
 import { isInteractive } from '../lib/tabs';
 import { ConversationView } from '../components/ConversationView';
 import { TerminalCapture } from '../components/TerminalCapture';
+import { stopPlanText } from '../lib/session-actions';
 import { TokenUsageBadge } from '../components/TokenUsageBadge';
 import { SubagentTree } from '../components/SubagentTree';
 import { SessionTabBar } from '../components/SessionTabBar';
@@ -91,31 +92,8 @@ export function SessionDetail() {
 
   const interrupt = () => drive('Escape');
 
-  /**
-   * What stopping this session will actually do, said before it happens.
-   *
-   * "Stop" means three different things depending on how the session was
-   * started, and the difference is exactly what someone needs to know before
-   * clicking: one of them is reversible and two of them close a terminal.
-   */
-  const stopPlan = (): string => {
-    switch (session?.stopMethod) {
-      case 'claude stop':
-        return `Stop this background session?\n\nRuns \`claude stop ${session.id.slice(0, 8)}\`. `
-          + 'The conversation is kept and you can resume it later.';
-      case 'tmux kill-session':
-        return `Stop this session?\n\nCloses the tmux session ${session.target?.ref}, which this `
-          + 'dashboard started. The transcript is kept, so Reopen here brings it back.';
-      case 'SIGTERM':
-        return 'Stop this session?\n\nSends SIGTERM to the process — the same signal closing '
-          + 'its terminal sends. The transcript is kept; an answer in flight is lost.';
-      default:
-        return 'Stop this session?\n\nThere is no process here to stop, so this may do nothing.';
-    }
-  };
-
   const stop = async () => {
-    if (!id || acting || !window.confirm(stopPlan())) return;
+    if (!id || acting || !session || !window.confirm(stopPlanText(session))) return;
     setActing(true);
     try {
       const res = await fetch(`/api/sessions/${id}/stop`, { method: 'POST' });
@@ -307,7 +285,7 @@ export function SessionDetail() {
       */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 border-b border-border bg-muted/20">
         <Link to="/" className="text-xs text-muted-foreground hover:text-foreground whitespace-nowrap">
-          Overview
+          Dashboard
         </Link>
         <Rule />
 

@@ -467,10 +467,12 @@ itself. Add agent containers and another machine if you configure them.
 
 These do **not**:
 
-- **Sessions on `claude.ai/code`**, including anything you started from the web
-  app or drove by Remote Control. They leave no transcript on your disk and
-  there is no public API to ask for one. They are not hidden by a setting —
-  claude-deck cannot see them at all.
+- **Sessions on `claude.ai/code`** — not on their own. They leave no transcript
+  on your disk and there is no API to ask for one, so nothing here can find
+  them. **Add cloud session** on the dashboard is the way in: paste the link (or
+  the session id) and Claude Code attaches to it in a tmux session here, after
+  which it is an ordinary session on the board — readable, typeable, and bound
+  like any other pane.
 - **Sessions under a different user or `HOME`**, since the transcripts are
   somewhere else. Point `CLAUDE_DIR` at that directory if you have access to it.
 - **Sessions in a container that neither shares `~/.claude` nor matches

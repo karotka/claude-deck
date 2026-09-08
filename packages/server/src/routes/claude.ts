@@ -1,16 +1,27 @@
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
+import { trustedDirectories, bestLaunchDir } from '../services/trusted-dirs.js';
 import {
   killLaunchedSession,
   launchClaudeSession,
   resumeSessionInTmux,
+  attachCloudSessionInTmux,
 } from '../services/claude-launcher.js';
 import { getLaunchedSessions } from '../services/launched-sessions.js';
 import { cacheLaunchedSession, getCachedSession } from '../services/session-discovery.js';
 
 export async function claudeRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/claude/launch-defaults', async () => {
-    return { defaultCwd: config.spawnDefaultCwd };
+    // Claude Code will not start in a folder it has not been told to trust, so
+    // a default it does not trust is a launch that stops at a prompt. The
+    // trusted list is offered alongside, and the suggestion prefers the
+    // configured directory only when starting there will actually work.
+    const trusted = await trustedDirectories();
+    return {
+      defaultCwd: bestLaunchDir(config.spawnDefaultCwd, trusted),
+      configuredCwd: config.spawnDefaultCwd,
+      trustedCwds: trusted.slice(0, 20),
+    };
   });
 
   app.get('/api/claude/launched', async () => {
@@ -81,6 +92,28 @@ export async function claudeRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return reply.status(400).send({
         error: err instanceof Error ? err.message : 'resume failed',
+      });
+    }
+  });
+
+  /**
+   * Attach to a session running on claude.ai/code.
+   *
+   * The one kind of session the dashboard genuinely could not see: it leaves no
+   * transcript on this disk and there is no API to ask for one. `claude --cloud`
+   * attaches to it from here, and from that point it is an ordinary tmux
+   * session as far as everything else is concerned.
+   */
+  app.post('/api/claude/cloud', async (request, reply) => {
+    const { url, cwd } = request.body as { url?: string; cwd?: string };
+    if (!url) return reply.status(400).send({ error: 'url is required' });
+
+    try {
+      const entry = await attachCloudSessionInTmux(url, cwd);
+      return { ok: true, entry };
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Could not attach to that session',
       });
     }
   });

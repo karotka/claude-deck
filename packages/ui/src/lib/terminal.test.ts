@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitPane } from './terminal';
+import { splitPane, arrowsBelongToSession } from './terminal';
 
 const RULE = '─'.repeat(60);
 const TITLED = `${'─'.repeat(40)} Browse ML ranker ─`;
@@ -71,3 +71,53 @@ describe('splitPane', () => {
   });
 });
 
+
+describe('arrowsBelongToSession', () => {
+  // The ordinary state: an input line marked with the prompt glyph, framed by
+  // rules, carrying whatever has been typed on it.
+  const idle = [
+    'some output',
+    '\u2500\u2500\u2500\u2500\u2500 Claude monitor \u2500',
+    '\u276f ',
+    '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '  Model: Opus 5 | Ctx: 409.0k',
+  ].join('\n');
+
+  // A modal: the glyph marks the selected option, and there is no input line.
+  const trustDialog = [
+    ' Quick safety check: Is this a project you created or one you trust?',
+    ' \u276f No, exit',
+    '   Yes, I trust this folder',
+    ' Enter to confirm \u00b7 Esc to cancel',
+  ].join('\n');
+
+  it('leaves the arrows to the history at an ordinary empty prompt', () => {
+    expect(arrowsBelongToSession(idle, '')).toBe(false);
+  });
+
+  it('gives them to the session while a slash command is being typed', () => {
+    // Claude Code opens its command list as soon as the input starts with `/`,
+    // and that list is walked with the arrows.
+    expect(arrowsBelongToSession(idle, '/mod')).toBe(true);
+  });
+
+  it('gives them to the session when a modal is up', () => {
+    // These are answered with the arrows and nothing else, and they start on
+    // the option that declines.
+    expect(arrowsBelongToSession(trustDialog, '')).toBe(true);
+  });
+
+  it('keeps them for the history once there is text to recall past', () => {
+    expect(arrowsBelongToSession(idle, 'what I was writing')).toBe(false);
+  });
+
+  it('is not fooled by a prompt glyph carrying only whitespace', () => {
+    expect(arrowsBelongToSession('\u276f    \n', '')).toBe(false);
+  });
+
+  it('reads the marker through colour', () => {
+    // Panes arrive with their escape sequences; a modal drawn in colour is
+    // still a modal.
+    expect(arrowsBelongToSession('\u001b[1m \u276f No, exit\u001b[0m', '')).toBe(true);
+  });
+});

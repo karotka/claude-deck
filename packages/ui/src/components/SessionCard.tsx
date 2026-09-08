@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { type Session, type WorkItem, hideSession, unhideSession } from '../lib/api';
 import { WorkItemBadge } from './WorkItemBadge';
+import { stopPlanText, canDrive, interrupt, stop } from '../lib/session-actions';
 import { SourceBadge } from './SourceBadge';
 import { cn, formatTokens, formatCost, timeAgo, truncate, projectName, containerLabel } from '../lib/utils';
 
@@ -20,14 +21,36 @@ interface Props {
   session: Session;
   workItem?: WorkItem;
   onToggleHide?: () => void;
+  /** Called after an action that changes what the board should show. */
+  onChanged?: () => void;
 }
 
-export function SessionCard({ session, workItem, onToggleHide }: Props) {
+export function SessionCard({ session, workItem, onToggleHide, onChanged }: Props) {
   const shortId = session.id.slice(0, 12);
   const project = projectName(session.projectPath);
   const modelShort = session.model
     ?.replace('claude-', '')
     .replace(/-\d+$/, '') ?? 'unknown';
+
+  /*
+   * The card is a link, so every control on it has to say so explicitly: a
+   * click that reaches the anchor navigates, and "I meant the button" is not
+   * something the browser infers.
+   */
+  const act = (fn: () => Promise<unknown>) => async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await fn();
+    onChanged?.();
+  };
+
+  const handleInterrupt = act(() => interrupt(session.id));
+
+  const handleStop = act(async () => {
+    if (!window.confirm(stopPlanText(session))) return;
+    const error = await stop(session.id);
+    if (error) window.alert(error);
+  });
 
   const handleToggleHide = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -81,6 +104,30 @@ export function SessionCard({ session, workItem, onToggleHide }: Props) {
         {session.gitBranch && (
           <span className="text-xs text-muted-foreground ml-auto">{truncate(session.gitBranch, 30)}</span>
         )}
+        {canDrive(session) && (
+          <>
+            {/* Only where there is something to drive. A card for a stopped
+                session offering to interrupt it would be a button that lies. */}
+            <button
+              onClick={handleInterrupt}
+              title="Send Escape — stops what Claude is doing without ending the session"
+              className={cn(
+                'text-xs px-2 py-0.5 rounded transition-colors',
+                'text-muted-foreground/50 hover:text-yellow-400 hover:bg-muted',
+                !session.gitBranch && 'ml-auto',
+              )}
+            >
+              Interrupt
+            </button>
+            <button
+              onClick={handleStop}
+              title="End the session. What that means depends on how it was started — you'll be told before it happens."
+              className="text-xs px-2 py-0.5 rounded transition-colors text-muted-foreground/50 hover:text-red-400 hover:bg-muted"
+            >
+              Stop
+            </button>
+          </>
+        )}
         <button
           onClick={handleToggleHide}
           className={cn(
@@ -88,7 +135,7 @@ export function SessionCard({ session, workItem, onToggleHide }: Props) {
             session.hidden
               ? 'bg-muted text-muted-foreground hover:bg-accent'
               : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted',
-            !session.gitBranch && 'ml-auto',
+            !session.gitBranch && !canDrive(session) && 'ml-auto',
           )}
         >
           {session.hidden ? 'Show' : 'Hide'}

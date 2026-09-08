@@ -77,7 +77,13 @@ export async function sessionsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Mark hidden flag on each session
-    const withHidden = sessions.map(s => ({ ...s, hidden: isHidden(s.id) }));
+    // `stopMethod` rides along so a card can say what Stop will do without
+    // asking a second time, and without the browser working it out for itself.
+    const withHidden = sessions.map(s => ({
+      ...s,
+      hidden: isHidden(s.id),
+      stopMethod: s.live ? planStop(s) : null,
+    }));
 
     // Filter out hidden sessions unless showHidden=true — except that a
     // session which is *provably running* is surfaced anyway, dimmed by its

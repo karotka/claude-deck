@@ -88,3 +88,31 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   }
   return -1;
 }
+
+/**
+ * Whether the arrow keys belong to the session rather than to prompt history.
+ *
+ * Two cases, and both are decided from things already known rather than by
+ * recognising a menu, which would mean matching the TUI's drawing.
+ *
+ * The first is a slash command being typed: Claude Code opens its command list
+ * as soon as the input starts with `/`, and the list is walked with the
+ * arrows. Nothing needs to be read for this — the text in the box says so.
+ *
+ * The second is a modal that has taken the whole screen: the model picker, the
+ * folder-trust question. There, `❯` marks the selected option. In the ordinary
+ * state `❯` marks the input line, and the input line holds what you have typed
+ * — so a `❯` with text after it, at a moment when the box you type into is
+ * empty, is not the prompt. That is the whole test.
+ *
+ * Anything it gets wrong sends an arrow to the session, which is recoverable;
+ * the alternative failure is a menu that cannot be answered.
+ */
+export function arrowsBelongToSession(pane: string, input: string): boolean {
+  if (input.startsWith('/')) return true;
+  if (input.trim() !== '') return false;
+  // Horizontal whitespace only. `\s` crosses newlines, which matched the
+  // ordinary empty prompt against the rule drawn on the line below it — and
+  // that reading hands every arrow to the session, leaving no history at all.
+  return /^[^\S\n]*❯[^\S\n]+\S/m.test(stripAnsi(pane));
+}

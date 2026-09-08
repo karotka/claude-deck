@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { splitPane } from '../lib/terminal';
+import { splitPane, arrowsBelongToSession } from '../lib/terminal';
 import { loadHistory, rememberPrompt, stepHistory } from '../lib/prompt-history';
 import { parseAnsi, type AnsiLine } from '../lib/ansi';
 import { cn } from '../lib/utils';
@@ -59,6 +59,20 @@ export function TerminalCapture({
   const userScrolledUpRef = useRef(false);
   const splitOverheadRef = useRef(0);
   const [history, setHistory] = useState<string[]>(() => loadHistory(sessionId));
+  /**
+   * Typing straight into the session instead of into this box.
+   *
+   * Everything typed here is normally held in the browser and pasted on Enter,
+   * which is what makes the box editable — and what makes a slash command
+   * useless: Claude Code opens its command list the moment the input starts
+   * with `/`, and the session never sees a `/` until you have already committed
+   * the whole line. So `/` on an empty prompt hands the keyboard over. From
+   * there the TUI's own input line is the one being typed into, and the list,
+   * its filtering and its arrows all work because it is a real prompt.
+   */
+  const [passThrough, setPassThrough] = useState(false);
+  const typeQueueRef = useRef('');
+  const typingRef = useRef(false);
   // -1 is "not in the history": the box holds whatever you were typing, and
   // `draftRef` is where it waits while you look back through what you sent.
   const historyIndexRef = useRef(-1);
@@ -118,6 +132,8 @@ export function TerminalCapture({
     setHistory(loadHistory(sessionId));
     historyIndexRef.current = -1;
     draftRef.current = '';
+    setPassThrough(false);
+    typeQueueRef.current = '';
   }, [sessionId]);
 
   useEffect(() => {
@@ -269,6 +285,41 @@ export function TerminalCapture({
     }
   };
 
+  /**
+   * Send typed characters, batching whatever arrives during a round trip.
+   *
+   * One request per keystroke would be a round trip per letter; queuing means a
+   * fast typist's word goes in one. Off the `sending` flag, which disables the
+   * prompt — a letter is not a message.
+   */
+  const pumpTyping = async () => {
+    if (typingRef.current) return;
+    const text = typeQueueRef.current;
+    if (!text) return;
+    typeQueueRef.current = '';
+    typingRef.current = true;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, noEnter: true }),
+      });
+      if (res.ok && !(await applyResponsePane(res))) await fetchCapture();
+    } catch { /* the pane shows whether it landed */ }
+    typingRef.current = false;
+    void pumpTyping();
+  };
+
+  const typeIntoSession = (text: string) => {
+    typeQueueRef.current += text;
+    void pumpTyping();
+  };
+
+  const leavePassThrough = () => {
+    setPassThrough(false);
+    typeQueueRef.current = '';
+  };
+
   const handleWheel = (e: React.WheelEvent<HTMLElement>) => {
     const el = outputRef.current;
     // If the box really does overflow — a pane taller than the panel, which
@@ -385,6 +436,37 @@ export function TerminalCapture({
     if (e.metaKey || e.ctrlKey || e.altKey) {
       if (e.key.startsWith('Arrow')) return;
     }
+    /*
+     * `/` on an empty prompt hands the keyboard to the session, so the command
+     * list opens and can be filtered and picked from. Only on an empty prompt:
+     * a slash inside a sentence is a slash.
+     */
+    if (!passThrough && input.length === 0 && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      setPassThrough(true);
+      typeIntoSession('/');
+      return;
+    }
+
+    if (passThrough) {
+      if (e.key === 'Escape') { e.preventDefault(); leavePassThrough(); sendKey('Escape'); return; }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); leavePassThrough(); sendKey('Enter'); return; }
+      if (e.key === 'Backspace') { e.preventDefault(); sendKey('BSpace'); return; }
+      if (e.key === 'Tab') { e.preventDefault(); sendKey(e.shiftKey ? 'BTab' : 'Tab'); return; }
+      if (e.key.startsWith('Arrow') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        sendKey(e.key.replace('Arrow', ''));
+        return;
+      }
+      // A printable character. Modified chords are the app's or the browser's,
+      // and fall through to the handlers below.
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        typeIntoSession(e.key);
+        return;
+      }
+    }
+
     // Ctrl-C interrupts the session rather than copying — there is nothing to
     // copy from an empty prompt, and interrupting is the thing you need in a
     // hurry. With a selection, let the browser copy it.
@@ -416,12 +498,18 @@ export function TerminalCapture({
      * nobody could reach. The history that this box can put back is the one it
      * wrote.
      *
-     * The arrows are not forwarded to the session at all. A menu in the TUI
-     * takes a number and Enter, which is the whole reason the plain key was
-     * free to spend on this.
+     * When the session has something to choose from, they go to it instead —
+     * a slash command's list, the model picker, the folder-trust question.
+     * That is not a nicety: those menus are answered with the arrows and
+     * nothing else, and the option they start on is usually the one that
+     * declines. Shift forces the arrow through whatever the guess was.
      */
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
+      if (e.shiftKey || arrowsBelongToSession(output, input)) {
+        sendKey(e.key === 'ArrowUp' ? 'Up' : 'Down');
+        return;
+      }
       if (history.length === 0) return;
       // Entering the history parks the unsent draft so Down can hand it back.
       if (historyIndexRef.current === -1) draftRef.current = input;
@@ -561,11 +649,25 @@ export function TerminalCapture({
               onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
               placeholder={
-                uploading ? 'Attaching…' : sending ? 'Sending…' : 'Type a message'
+                uploading ? 'Attaching…'
+                  : sending ? 'Sending…'
+                  // The box stays empty in pass-through, because the text is
+                  // going into the session's own prompt — which is on screen
+                  // just above. Saying so beats an empty box that looks broken.
+                  : passThrough ? 'Typing into the session — Esc to come back'
+                  : 'Type a message'
               }
-              title="Enter sends · Shift+Enter newline · ↑ ↓ what you sent before · Shift+Tab permission mode"
+              title={
+                'Enter sends · Shift+Enter newline · ↑ ↓ what you sent before'
+                + ' · Shift+↑ ↓ move a menu in the session · Shift+Tab permission mode'
+              }
               // text-base below sm keeps iOS from zooming the page on focus.
-              className="flex-1 min-w-0 bg-transparent resize-none outline-none text-base sm:text-[13px] font-mono placeholder:text-foreground/25"
+              className={cn(
+                'flex-1 min-w-0 bg-transparent resize-none outline-none text-base sm:text-[13px] font-mono',
+                passThrough
+                  ? 'placeholder:text-primary/70 placeholder:italic'
+                  : 'placeholder:text-foreground/25',
+              )}
             />
           </div>
           {status.length > 0 && (

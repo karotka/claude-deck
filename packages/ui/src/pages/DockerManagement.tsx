@@ -244,7 +244,7 @@ export function DockerManagement() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-4">
           <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
-            ← Overview
+            ← Dashboard
           </Link>
           <h1 className="text-xl sm:text-2xl font-bold">Docker Containers</h1>
         </div>

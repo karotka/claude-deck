@@ -21,6 +21,7 @@ export function Dashboard() {
   const [recent, setRecent] = useState(true);
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [attaching, setAttaching] = useState(false);
   const [startDevOpen, setStartDevOpen] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [workItems, setWorkItems] = useState<Record<string, WorkItem>>({});
@@ -95,6 +96,66 @@ export function Dashboard() {
     );
   }, [sessions, statusFilter, search]);
 
+  /**
+   * Attach to a session running on claude.ai/code.
+   *
+   * The one kind of session this dashboard genuinely could not show: it leaves
+   * no transcript on this disk, and there is no API to ask for one. Claude Code
+   * can attach to it from here, though, and once it is running in a pane it is
+   * an ordinary session — which makes a pasted link the whole of the feature.
+   */
+  const addCloudSession = async () => {
+    const url = window.prompt(
+      'Paste the claude.ai/code link, or the session id from it —\n'
+      + 'the whole last segment, including the "session_" part.\n\n'
+      + 'It will be attached in a tmux session here, so you can read and drive it '
+      + 'from this dashboard.',
+    );
+    if (!url) return;
+
+    // Asked for, not assumed. Claude Code checks that it trusts a directory
+    // before it starts, and the default was the home directory — so the first
+    // attach stopped at a prompt asking the user to trust their entire home,
+    // which is the last folder anyone should wave through.
+    const defaults = await fetch('/api/claude/launch-defaults')
+      .then(r => r.json()).catch(() => ({}));
+    const trusted: string[] = defaults.trustedCwds || [];
+    const cwd = window.prompt(
+      'Which directory should the session start in?\n\n'
+      + 'The work happens in the cloud, so this only decides where the local '
+      + 'shell sits. Claude Code will not start in a folder it has not been told '
+      + 'to trust, so the suggestion is one it already trusts.\n\n'
+      + (trusted.length
+        ? `Already trusted: ${trusted.slice(0, 6).join(', ')}`
+        : 'None are trusted yet, so expect the trust question in the Terminal '
+          + 'panel (Shift+↑ ↓ to choose, Enter to confirm).'),
+      defaults.defaultCwd || '',
+    );
+    if (!cwd) return;
+    setAttaching(true);
+    try {
+      const res = await fetch('/api/claude/cloud', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, cwd }),
+      });
+      // The attach can still fail *after* this returns — Claude Code may stop
+      // at a folder-safety prompt, for instance — so the card that appears is
+      // the place to find out, and Stop on it is how to take it back off.
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        window.alert(body.error || 'Could not attach to that session.');
+      } else {
+        // The scan binds it the way it binds any pane, so it appears on its own
+        // once Claude Code has started in there.
+        await refresh();
+      }
+    } catch {
+      window.alert('Could not reach the server.');
+    }
+    setAttaching(false);
+  };
+
   const handleRefresh = async () => {
     setRefreshing(true);
     await refresh();
@@ -134,6 +195,14 @@ export function Dashboard() {
               <span>~{formatCost(stats.totalCost)}</span>
             </div>
           )}
+          <button
+            onClick={addCloudSession}
+            disabled={attaching}
+            title="Paste a claude.ai/code link. It runs `claude --cloud <url>` in a tmux session here, which is the only way a cloud session can be seen from this machine at all."
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 transition-colors disabled:opacity-50"
+          >
+            {attaching ? 'Attaching…' : 'Add cloud session'}
+          </button>
           <button
             onClick={handleRefresh}
             disabled={refreshing}
@@ -211,6 +280,7 @@ export function Dashboard() {
               session={session}
               workItem={key ? workItems[key] : undefined}
               onToggleHide={refresh}
+              onChanged={refresh}
             />
           );
         })}

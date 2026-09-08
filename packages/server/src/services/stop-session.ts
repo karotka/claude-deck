@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
 import type { Session } from '../types.js';
+import { forgetLaunchedSession } from './launched-sessions.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -18,11 +19,14 @@ export type StopMethod =
 export interface StopDeps {
   run: (file: string, args: string[]) => Promise<void>;
   kill: (pid: number, signal: NodeJS.Signals) => void;
+  /** Drop an app-launched session from the registry that keeps it on the board. */
+  forget: (sessionId: string) => Promise<void>;
 }
 
 const defaultDeps: StopDeps = {
   run: async (file, args) => { await execFileAsync(file, args, { timeout: 15000 }); },
   kill: (pid, signal) => { process.kill(pid, signal); },
+  forget: async (sessionId) => { await forgetLaunchedSession(sessionId); },
 };
 
 /**
@@ -103,6 +107,11 @@ export async function stopSession(
       return plan;
     case 'tmux kill-session':
       await deps.run('tmux', ['kill-session', '-t', ownTmuxName(session)!]);
+      // And forget it, or the card outlives the thing it stands for: a launched
+      // session is on the board because the registry says so, not because a
+      // process exists, so killing the pane alone leaves a card that cannot be
+      // opened and cannot be got rid of.
+      await deps.forget(session.id);
       return plan;
     case 'SIGTERM':
       deps.kill(session.pid!, 'SIGTERM');
