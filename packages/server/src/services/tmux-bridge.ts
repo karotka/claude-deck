@@ -212,6 +212,11 @@ export const ALLOWED_RAW_KEYS = new Set([
   'Up', 'Down', 'Left', 'Right',
   'Enter', 'Escape', 'Tab', 'BTab', 'BSpace', 'Space',
   'C-c', 'C-d',
+  // Kill the input line. Needed because the browser's prompt and the session's
+  // are two different lines: starting a slash command from a box that is empty
+  // means nothing if the session's own line still holds something, since the
+  // list only opens when its input *begins* with the slash.
+  'C-u',
 ]);
 
 /**

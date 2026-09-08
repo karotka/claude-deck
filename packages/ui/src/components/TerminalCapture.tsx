@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { splitPane, arrowsBelongToSession } from '../lib/terminal';
+import { splitPane, arrowsBelongToSession, sessionPromptText } from '../lib/terminal';
 import { loadHistory, rememberPrompt, stepHistory } from '../lib/prompt-history';
 import { parseAnsi, type AnsiLine } from '../lib/ansi';
 import { cn } from '../lib/utils';
@@ -73,6 +73,22 @@ export function TerminalCapture({
   const [passThrough, setPassThrough] = useState(false);
   const typeQueueRef = useRef('');
   const typingRef = useRef(false);
+  /**
+   * What has been typed into the session, kept here rather than read back.
+   *
+   * The box used to mirror the pane, and a pane is a picture: lines are padded
+   * to its width, so a trailing space is indistinguishable from the padding and
+   * was trimmed away — you pressed space and nothing appeared. Deleting had the
+   * matching fault, since an emptied line reads the same as one that could not
+   * be read, and the box fell back to whatever was last known.
+   *
+   * So typing echoes locally, exactly as typed, and the pane is consulted only
+   * when the session changes the line itself — a Tab completion.
+   */
+  const [typed, setTyped] = useState('');
+  const adoptPaneRef = useRef(false);
+  /** Whatever the session's line held before we cleared it, to give back. */
+  const displacedRef = useRef('');
   // -1 is "not in the history": the box holds whatever you were typing, and
   // `draftRef` is where it waits while you look back through what you sent.
   const historyIndexRef = useRef(-1);
@@ -134,6 +150,7 @@ export function TerminalCapture({
     draftRef.current = '';
     setPassThrough(false);
     typeQueueRef.current = '';
+    setTyped('');
   }, [sessionId]);
 
   useEffect(() => {
@@ -146,6 +163,17 @@ export function TerminalCapture({
     if (outputRef.current && !userScrolledUpRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
+  }, [output]);
+
+  // A completion changes the line under us, so the next frame after Tab is the
+  // one worth reading. Only that one: reading every frame is what let the pane's
+  // padding and its blank line overwrite what had been typed.
+  useEffect(() => {
+    if (!adoptPaneRef.current) return;
+    const line = sessionPromptText(output);
+    if (line === null) return;
+    adoptPaneRef.current = false;
+    setTyped(line);
   }, [output]);
 
   // Rows the split takes out of the box: the status lines and the rule above
@@ -315,9 +343,47 @@ export function TerminalCapture({
     void pumpTyping();
   };
 
-  const leavePassThrough = () => {
+  /**
+   * Give the line back.
+   *
+   * `restore` is the difference between changing your mind and finishing.
+   * Escape, or backspacing away the slash, is a cancel: whatever was on the
+   * line before the session took it belongs back in the box. Enter is not —
+   * the command has run, and putting an old draft back at that moment is text
+   * appearing from nowhere, which is what it looked like.
+   */
+  /**
+   * Take the session's line over, keeping whatever was on it.
+   *
+   * The line is read fresh rather than from the last frame. The cached pane can
+   * be a poll behind, and a draft typed in the terminal a moment ago would not
+   * be in it yet — so it would be cleared without ever having been seen, and
+   * Escape would have nothing to give back. One extra round trip is a small
+   * price for not destroying text silently.
+   */
+  const takeOverLine = async (first: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/capture?lines=80`);
+      const data = await res.json().catch(() => ({}));
+      displacedRef.current = sessionPromptText(data?.content ?? '') ?? '';
+    } catch {
+      displacedRef.current = '';
+    }
+    await sendKey('C-u');
+    typeIntoSession(first);
+  };
+
+  const leavePassThrough = (restore = true) => {
     setPassThrough(false);
     typeQueueRef.current = '';
+    setTyped('');
+    adoptPaneRef.current = false;
+    // Hand back anything that was on the session's line when we took it over,
+    // so a draft someone had started in the terminal is not simply gone. It
+    // comes back into the box, where it can be seen and finished.
+    const displaced = displacedRef.current;
+    displacedRef.current = '';
+    if (restore && displaced) updateInput(displaced);
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLElement>) => {
@@ -337,8 +403,32 @@ export function TerminalCapture({
 
   // Send the buffered input followed by a Tab keystroke (no Enter), so the
   // session sees the partial text and lets Claude's inline suggestion accept.
+  /**
+   * Tab hands the line to the session so Claude Code can complete it.
+   *
+   * The text has to *move* for that — a completion is the session's to make,
+   * and it can only make it against its own input line. What that looked like
+   * was the text vanishing: it went into the session's prompt, up in the pane,
+   * while the box you were watching went empty. So the handover is now
+   * explicit. The box follows the session's line from here, which is where the
+   * text actually is, and Escape brings it back.
+   */
   const sendTab = async () => {
     if (sending) return;
+    if (input.length > 0) {
+      setTyped(input);
+      // Yours before the session took the line, so Escape gives it back —
+      // otherwise handing text over to be completed and then changing your
+      // mind loses it, which is a worse trade than not completing at all.
+      displacedRef.current = input;
+      setPassThrough(true);
+      // Clear the session's line first, for the same reason the slash command
+      // does: the box and the session's prompt are two lines, and pasting into
+      // one that already holds something appends rather than replaces. That is
+      // where the doubled text came from — the same sentence twice, once from
+      // this handover and once from the last one.
+      await sendKey('C-u');
+    }
     setSending(true);
     try {
       if (input.length > 0) {
@@ -425,6 +515,11 @@ export function TerminalCapture({
 
   /** Editing the recalled text makes it yours; the arrows start over from it. */
   const handleInputChange = (value: string) => {
+    // While the session has the keyboard the box is a view of its prompt, not
+    // an editor. Every key is intercepted, but a paste or an input method can
+    // still get here, and writing to `input` behind the mirror is how the box
+    // ends up showing two different things at once.
+    if (passThrough) return;
     historyIndexRef.current = -1;
     updateInput(value);
   };
@@ -444,15 +539,41 @@ export function TerminalCapture({
     if (!passThrough && input.length === 0 && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       setPassThrough(true);
-      typeIntoSession('/');
+      // The two prompts are different lines. An empty box says nothing about
+      // the session's own, and a slash appended to whatever is already there
+      // opens no list at all — it is just a slash in the middle of a line,
+      // which is exactly what this looked like when it did not work. So clear
+      // that line first, keeping what was on it.
+      setTyped('/');
+      void takeOverLine('/');
       return;
     }
 
     if (passThrough) {
       if (e.key === 'Escape') { e.preventDefault(); leavePassThrough(); sendKey('Escape'); return; }
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); leavePassThrough(); sendKey('Enter'); return; }
-      if (e.key === 'Backspace') { e.preventDefault(); sendKey('BSpace'); return; }
-      if (e.key === 'Tab') { e.preventDefault(); sendKey(e.shiftKey ? 'BTab' : 'Tab'); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        leavePassThrough(false);
+        sendKey('Enter');
+        return;
+      }
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        const next = typed.slice(0, -1);
+        setTyped(next);
+        // Backspacing away the slash is leaving, not typing an empty command.
+        if (next === '') leavePassThrough();
+        sendKey('BSpace');
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        // A completion is the session's edit to the line, so take the line
+        // back from it once it has been made.
+        adoptPaneRef.current = true;
+        sendKey(e.shiftKey ? 'BTab' : 'Tab');
+        return;
+      }
       if (e.key.startsWith('Arrow') && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         sendKey(e.key.replace('Arrow', ''));
@@ -462,6 +583,7 @@ export function TerminalCapture({
       // and fall through to the handlers below.
       if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
+        setTyped(t => t + e.key);
         typeIntoSession(e.key);
         return;
       }
@@ -533,6 +655,19 @@ export function TerminalCapture({
   };
 
   const { body, status } = splitPane(output);
+
+  /*
+   * While the keyboard belongs to the session, the box shows the session's own
+   * prompt rather than nothing. Typing in one place and watching it appear in
+   * another is disorienting even when it works, and mirroring the pane rather
+   * than echoing the keystrokes means completions and anything else the TUI
+   * does to the line show up here too — it is the same text, not a guess at it.
+   */
+  // Only trust the pane while it is showing the command being typed. Between
+  // clearing the line and the next frame it shows Claude Code's own suggestion
+  // placeholder, which is not text anybody typed and must not be presented as
+  // though it were — that is the stray text this used to leave in the box.
+  const shown = passThrough ? typed : input;
 
   if (loading) {
     return <div className="text-sm text-muted-foreground p-4">Connecting to terminal...</div>;
@@ -644,7 +779,7 @@ export function TerminalCapture({
                 el.style.height = 'auto';
                 el.style.height = `${el.scrollHeight}px`;
               }}
-              value={input}
+              value={shown}
               onChange={e => handleInputChange(e.target.value)}
               onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
@@ -654,7 +789,7 @@ export function TerminalCapture({
                   // The box stays empty in pass-through, because the text is
                   // going into the session's own prompt — which is on screen
                   // just above. Saying so beats an empty box that looks broken.
-                  : passThrough ? 'Typing into the session — Esc to come back'
+                  : passThrough ? 'Esc to come back'
                   : 'Type a message'
               }
               title={

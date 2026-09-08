@@ -116,3 +116,35 @@ export function arrowsBelongToSession(pane: string, input: string): boolean {
   // that reading hands every arrow to the session, leaving no history at all.
   return /^[^\S\n]*❯[^\S\n]+\S/m.test(stripAnsi(pane));
 }
+
+/**
+ * What the session's own prompt line currently holds.
+ *
+ * Used to show, in the box you are typing into, the text that is actually
+ * going into the session — otherwise a slash command types in one place and
+ * appears in another, which is disorienting however well it works.
+ *
+ * The last marked line is the input one: a menu drawn above it marks a
+ * selection with the same glyph, and the prompt is always below its list.
+ *
+ * An empty prompt reads as empty even though the TUI draws its own suggestion
+ * there. That suggestion is faint — `ESC [ 2 m` — and nobody typed it, so
+ * presenting it as the line's contents put words in the user's box that they
+ * had not written. Which is why the pane is searched with its escapes intact
+ * rather than stripped first.
+ *
+ * Returns null when there is no prompt line at all, which is the case while a
+ * modal has the screen.
+ */
+export function sessionPromptText(pane: string): string | null {
+  let found: string | null = null;
+  for (const line of pane.split('\n')) {
+    const at = line.indexOf('\u276f');
+    if (at === -1) continue;
+    // Only a prompt line if nothing visible precedes the glyph.
+    if (stripAnsi(line.slice(0, at)).trim() !== '') continue;
+    const rest = line.slice(at + 1);
+    found = /^[^\S\n]*\u001b\[2m/.test(rest) ? '' : stripAnsi(rest).trim();
+  }
+  return found;
+}

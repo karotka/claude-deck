@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitPane, arrowsBelongToSession } from './terminal';
+import { splitPane, arrowsBelongToSession, sessionPromptText } from './terminal';
 
 const RULE = '─'.repeat(60);
 const TITLED = `${'─'.repeat(40)} Browse ML ranker ─`;
@@ -119,5 +119,63 @@ describe('arrowsBelongToSession', () => {
     // Panes arrive with their escape sequences; a modal drawn in colour is
     // still a modal.
     expect(arrowsBelongToSession('\u001b[1m \u276f No, exit\u001b[0m', '')).toBe(true);
+  });
+});
+
+describe('sessionPromptText', () => {
+  it('reads what the session prompt is holding', () => {
+    const pane = [
+      'some output',
+      '\u2500\u2500\u2500\u2500\u2500 Claude monitor \u2500',
+      '\u276f /mod',
+      '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    ].join('\n');
+    expect(sessionPromptText(pane)).toBe('/mod');
+  });
+
+  it('is empty, not absent, at an empty prompt', () => {
+    expect(sessionPromptText('\u276f ')).toBe('');
+  });
+
+  it('takes the input line rather than a menu selection above it', () => {
+    // A command list marks its selection with the same glyph, and the prompt
+    // is always below the list.
+    const pane = [
+      '  \u276f /model      Set the AI model',
+      '    /loop       Run a prompt on an interval',
+      '\u276f /mod',
+    ].join('\n');
+    expect(sessionPromptText(pane)).toBe('/mod');
+  });
+
+  it('reads through colour, since panes arrive with their escapes', () => {
+    expect(sessionPromptText('\u001b[1m\u276f /mod\u001b[0m')).toBe('/mod');
+  });
+
+  it('has nothing to read when there is no prompt line', () => {
+    expect(sessionPromptText('Quick safety check: ...')).toBeNull();
+  });
+
+  it('does not keep the padding a pane is drawn with', () => {
+    expect(sessionPromptText('\u276f /mod          ')).toBe('/mod');
+  });
+});
+
+describe('sessionPromptText and the TUI\'s own suggestion', () => {
+  it('reads an empty prompt as empty, not as the suggestion drawn in it', () => {
+    // Claude Code draws a faint hint on an empty input line. Nobody typed it,
+    // and showing it as the line's contents put words in the user's box.
+    const pane = '\u001b[39m\u276f \u001b[2mTry "how do I log an error?"';
+    expect(sessionPromptText(pane)).toBe('');
+  });
+
+  it('still reads text that was actually typed', () => {
+    expect(sessionPromptText('\u001b[39m\u276f ahoj')).toBe('ahoj');
+  });
+
+  it('ignores a glyph with something visible before it', () => {
+    // A selected item in a list, drawn indented under a heading, is not the
+    // input line.
+    expect(sessionPromptText('list: \u276f /model')).toBeNull();
   });
 });
