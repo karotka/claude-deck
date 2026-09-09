@@ -1,6 +1,7 @@
 import type { WorkItem } from '../lib/api';
 import { WorkItemBadge } from './WorkItemBadge';
 import { cn } from '../lib/utils';
+import { workItemUrl } from '../lib/work-item-url';
 
 /**
  * One piece of work a session touches.
@@ -11,26 +12,31 @@ import { cn } from '../lib/utils';
  * that, a passing reference reads as equal to the work in hand.
  *
  * The link is whatever the tracker returned, since only it knows its own URL
- * format; with no tracker configured there is no link and no badge, just the
- * key, which is still worth showing.
+ * format. Without a tracker there is still a link if the dashboard has been
+ * told where the tracker lives — an address is all a link needs, and requiring
+ * an API token before a key becomes clickable is a poor trade. Without either,
+ * the key alone, which is still worth showing.
  */
 export function WorkItemRow({
   tag,
   mentions,
   item,
   primary,
+  urlTemplate,
 }: {
   tag: string;
   /** How often the transcript mentions it — the ranking, made visible. */
   mentions: number;
   item?: WorkItem;
   primary: boolean;
+  urlTemplate?: string;
 }) {
+  const href = workItemUrl(tag, urlTemplate, item?.url);
   return (
     <div className="flex items-start gap-2 flex-wrap">
-      {item?.url ? (
+      {href ? (
         <a
-          href={item.url}
+          href={href}
           target="_blank"
           rel="noreferrer"
           title="Open in the tracker"

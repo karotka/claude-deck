@@ -541,6 +541,14 @@ export interface AppConfig {
    * which source names are cheap to read.
    */
   transports: Record<string, { pollIntervalMs?: number }>;
+  /**
+   * Where a work item lives, as a template with `{key}` in it. Empty when
+   * nothing is configured. Separate from the tracker: fetching an item's status
+   * needs an API token, linking to it needs only the address.
+   */
+  trackerItemUrl?: string;
+  /** Claude Code installed on this machine; null when it could not be asked. */
+  claudeVersion?: string | null;
   /** Largest file the terminal accepts on a drop or paste. */
   maxAttachmentBytes: number;
 }

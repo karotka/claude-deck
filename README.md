@@ -193,6 +193,13 @@ never read, never sent to, and refused for removal.
 
 ### A tracker
 
+A tracker needs an API token, and fetching a ticket's status is what that token
+buys. **Linking to one does not.** Set `JIRA_BASE_URL` (or `ATLASSIAN_SITE_NAME`)
+and every key on the board becomes a link, with or without credentials; for
+anything that is not Jira, `TRACKER_ITEM_URL` takes a template with `{key}` in
+it. Where a tracker *is* configured its own URL wins, since only it knows its
+format.
+
 Live issue status beside each session. Jira ships as the one implementation;
 without credentials the badges are simply absent and nothing else changes.
 

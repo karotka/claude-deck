@@ -92,6 +92,39 @@ export function SessionDetail() {
 
   const interrupt = () => drive('Escape');
 
+  /*
+   * A session runs the version it started with, which is what Claude Code
+   * means by "Update installed · Restart to update". It says so in the pane
+   * and then leaves you to find the tmux session and do it by hand.
+   */
+  const behind = !!(
+    appConfig?.claudeVersion
+    && session?.claudeVersion
+    && appConfig.claudeVersion !== session.claudeVersion
+  );
+
+  const restart = async () => {
+    if (!id || acting) return;
+    const note = behind
+      ? `\n\nIt is running ${session?.claudeVersion} and ${appConfig?.claudeVersion} is installed.`
+      : '';
+    if (!window.confirm(
+      'Restart this session?\n\nStops it and starts it again on the same '
+      + `conversation, in the same directory. Nothing is lost; an answer in flight is.${note}`,
+    )) return;
+    setActing(true);
+    try {
+      const res = await fetch(`/api/sessions/${id}/restart`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setResumeError(body.error || 'Could not restart the session.');
+      }
+    } catch {
+      setResumeError('Could not restart the session.');
+    }
+    setActing(false);
+  };
+
   const stop = async () => {
     if (!id || acting || !session || !window.confirm(stopPlanText(session))) return;
     setActing(true);
@@ -317,6 +350,23 @@ export function SessionDetail() {
               Interrupt
             </button>
             <button
+              onClick={restart}
+              disabled={acting}
+              title={
+                behind
+                  ? `Running ${session.claudeVersion}; ${appConfig?.claudeVersion} is installed. `
+                    + 'Restart runs it again on the same conversation.'
+                  : 'Stop and start again on the same conversation, in the same directory'
+              }
+              className={`text-xs px-2 py-1 rounded disabled:opacity-40 ${
+                behind
+                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25'
+                  : 'bg-muted text-muted-foreground hover:bg-accent'
+              }`}
+            >
+              {behind ? 'Restart · update' : 'Restart'}
+            </button>
+            <button
               onClick={stop}
               disabled={acting}
               title="End the session. What that means depends on how it was started — you'll be told before it happens."
@@ -459,6 +509,7 @@ export function SessionDetail() {
                   mentions={t.mentions}
                   item={workItems[t.tag]}
                   primary={t.tag === primaryTag}
+                  urlTemplate={appConfig?.trackerItemUrl}
                 />
               ))}
               {!trackerConfigured && (

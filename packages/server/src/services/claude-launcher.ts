@@ -67,10 +67,20 @@ async function waitForShell(tmuxSession: string): Promise<void> {
  * would exec the bare binary with no credentials.
  */
 export async function launchClaudeSession(rawCwd: string): Promise<LaunchedSession> {
+  return launchExistingId(randomUUID(), rawCwd);
+}
+
+/**
+ * Start Claude Code under an id chosen here.
+ *
+ * The id comes first so the dashboard knows what it started before the session
+ * has written anything — a session with no transcript yet would otherwise be
+ * invisible until its first message.
+ */
+async function launchExistingId(sessionId: string, rawCwd: string): Promise<LaunchedSession> {
   const cwd = rawCwd.trim();
   await assertLaunchableDirectory(cwd);
 
-  const sessionId = randomUUID();
   // uuid hex is free of the `.` and `:` that tmux reserves in target names.
   const tmuxSession = `${config.spawnTmuxPrefix}${sessionId.slice(0, 8)}`;
 
@@ -330,6 +340,44 @@ async function lastErrorLine(tmuxSession: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Stop a session and start it again on the same conversation.
+ *
+ * The reason this exists is Claude Code's own "Update installed · Restart to
+ * update": a session keeps the version it started with, so one left running
+ * for a week is a week behind, and the only way forward was to find its tmux
+ * session and do it by hand. That is the sort of thing the dashboard is for.
+ *
+ * Only for sessions this app started. Killing and relaunching someone else's
+ * terminal is not a restart, it is taking their session away and opening a
+ * different one where it used to be — and the cwd we would relaunch in is a
+ * guess in that case, not a record.
+ */
+export async function restartSessionInTmux(
+  sessionId: string,
+  hasConversation: boolean,
+): Promise<LaunchedSession> {
+  const entry = getLaunchedSession(sessionId);
+  if (!entry) {
+    throw new Error(
+      'Only a session this dashboard started can be restarted from here.',
+    );
+  }
+
+  // Forget it first: resume hands back the existing entry if one is still
+  // registered, which would leave the old, dead tmux session recorded.
+  await killLaunchedSession(sessionId);
+
+  // `--resume` needs a conversation to resume, and a session nobody has typed
+  // into yet has no transcript at all — it answers "No conversation found" and
+  // leaves a dead shell where the session was. Started fresh under the same id
+  // it is the same session as far as everything here is concerned, which is
+  // exactly how it was launched in the first place.
+  return hasConversation
+    ? resumeSessionInTmux(sessionId, entry.cwd)
+    : launchExistingId(sessionId, entry.cwd);
 }
 
 /** Kill a monitor-launched session's tmux session and drop it from the registry. */

@@ -26,6 +26,8 @@ const DEFAULT_LINES = 1000;
  * mirrors the server's own limit, which is the one that actually binds.
  */
 const WHEEL_NOTCH_PX = 40;
+/** Overflow below this is rounding across the rows, not content to scroll. */
+const OVERFLOW_SLACK_PX = 40;
 const MAX_WHEEL_TICKS = 12;
 
 const MAX_LINES = 50000;
@@ -43,6 +45,16 @@ export function TerminalCapture({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  /**
+   * Text that was on the session's line when the browser took it over.
+   *
+   * Shown, never put back in the box. Restoring it automatically is how an old
+   * line ended up in front of a freshly typed message and was sent with it —
+   * the words arrived in a message that had never contained them, which is the
+   * worst thing this can do. Here it can be read and copied, and it cannot
+   * join anything by itself.
+   */
+  const [displacedNotice, setDisplacedNotice] = useState<string | null>(null);
   // Files dragged or pasted onto the pane. They become paths in the prompt —
   // a terminal carries text, so an image has to arrive as somewhere to look.
   const [dropping, setDropping] = useState(false);
@@ -221,6 +233,12 @@ export function TerminalCapture({
     setSending(true);
     setSendError(null);
     try {
+      // Clear the session's line first. Pasting into a prompt that already
+      // holds something appends to it, so anything left on that line — a draft
+      // typed in the terminal, residue from an earlier handover — was sent as
+      // part of the message. What arrived was not what had been written, which
+      // is the worst thing this can do.
+      await sendKey('C-u');
       const res = await fetch(`/api/sessions/${sessionId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -383,15 +401,25 @@ export function TerminalCapture({
     // comes back into the box, where it can be seen and finished.
     const displaced = displacedRef.current;
     displacedRef.current = '';
-    if (restore && displaced) updateInput(displaced);
+    if (restore && displaced) setDisplacedNotice(displaced);
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLElement>) => {
     const el = outputRef.current;
-    // If the box really does overflow — a pane taller than the panel, which
-    // happens on a window too short for the floor the server clamps to — the
-    // browser's scrolling is the right one and this stays out of the way.
-    if (el && el.scrollHeight > el.clientHeight + 1) return;
+    /*
+     * If the box really does overflow — a pane taller than the panel, which
+     * happens on a window too short for the floor the server clamps to — the
+     * browser's scrolling is the right one and this stays out of the way.
+     *
+     * "Really" is the word doing the work. Rows are sized to the box, but each
+     * one renders a fraction of a pixel taller than it measures, and fifty of
+     * them add up to about a line: enough for `scrollHeight` to exceed
+     * `clientHeight` by a dozen pixels while there is nothing to scroll to. The
+     * wheel then went to the browser, which moved the pane thirteen pixels and
+     * stopped — indistinguishable from a wheel that does nothing. Anything
+     * under a couple of rows is that rounding, not scrollback.
+     */
+    if (el && el.scrollHeight > el.clientHeight + OVERFLOW_SLACK_PX) return;
     if (!canInteract) return;
     // A trackpad emits many small deltas per gesture; the notch is the unit
     // they add up to. Clamped so a flick cannot bank more than two requests'
@@ -759,6 +787,19 @@ export function TerminalCapture({
           {sendError && (
             <div className="mb-2 text-xs text-red-400 bg-red-950/20 border border-red-800 rounded-md px-3 py-1.5">
               {sendError}
+            </div>
+          )}
+          {displacedNotice && (
+            <div className="mb-2 flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-md px-3 py-1.5">
+              <span className="shrink-0">Cleared from the session's prompt:</span>
+              <span className="flex-1 min-w-0 break-words text-foreground/80">{displacedNotice}</span>
+              <button
+                onClick={() => setDisplacedNotice(null)}
+                className="shrink-0 px-1 rounded hover:bg-accent"
+                title="Dismiss"
+              >
+                &times;
+              </button>
             </div>
           )}
           <div

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useSessions } from '../hooks/useSessions';
 import { SessionCard } from '../components/SessionCard';
+import { useAppConfig } from '../hooks/useAppConfig';
 import { StartDevelopmentDialog } from '../components/StartDevelopmentDialog';
 import { NewSessionDialog } from '../components/NewSessionDialog';
 import { fetchWorkItems, type WorkItem } from '../lib/api';
@@ -21,6 +22,7 @@ export function Dashboard() {
   const [recent, setRecent] = useState(true);
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const appConfig = useAppConfig();
   const [attaching, setAttaching] = useState(false);
   const [startDevOpen, setStartDevOpen] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
@@ -281,6 +283,8 @@ export function Dashboard() {
               workItem={key ? workItems[key] : undefined}
               onToggleHide={refresh}
               onChanged={refresh}
+              itemUrlTemplate={appConfig?.trackerItemUrl}
+              tagPattern={appConfig?.tagPattern}
             />
           );
         })}

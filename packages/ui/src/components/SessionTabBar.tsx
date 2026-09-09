@@ -3,7 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Session } from '../lib/api';
 import { visibleTabs, loadClosedTabs, saveClosedTabs, reorder, tabByStep } from '../lib/tabs';
 import { RemoteDot } from './SourceBadge';
+import { useAppConfig } from '../hooks/useAppConfig';
 import { cn, truncate } from '../lib/utils';
+import { shortenItemLinks } from '../lib/work-item-url';
 
 /**
  * The dot, in the terms a person actually wants.
@@ -34,7 +36,7 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
-function defaultLabel(s: Session): string {
+function defaultLabel(s: Session, tagPattern?: string): string {
   // What the user called it, if they called it anything — nothing derived beats
   // a name someone chose.
   if (s.sessionName) return s.sessionName;
@@ -42,7 +44,9 @@ function defaultLabel(s: Session): string {
   // the only place that knows the naming rules that produce it.
   if (s.tag) return s.tag;
   if (s.firstUserMessage) {
-    return truncate(s.firstUserMessage, 30);
+    // A pasted ticket URL would otherwise fill the whole label with host and
+    // path and leave no room for the sentence around it.
+    return truncate(shortenItemLinks(s.firstUserMessage, tagPattern), 30);
   }
   const parts = s.projectPath.split('/').filter(Boolean);
   return parts[parts.length - 1] || s.id.slice(0, 8);
@@ -83,6 +87,7 @@ export function SessionTabBar({ sessions, activeId, interactiveOnly = false, not
   const [closed, setClosed] = useState<Set<string>>(() => loadClosedTabs());
   const inputRef = useRef<HTMLInputElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  const tagPattern = useAppConfig()?.tagPattern;
   const navigate = useNavigate();
 
   /**
@@ -309,7 +314,7 @@ export function SessionTabBar({ sessions, activeId, interactiveOnly = false, not
     >
       {rendered.map(s => {
         const isActive = s.id === activeId;
-        const label = tabNames[s.id] || defaultLabel(s);
+        const label = tabNames[s.id] || defaultLabel(s, tagPattern);
         const note = notes?.[s.id];
         const isDragging = dragId === s.id;
 

@@ -21,19 +21,41 @@ function trackerKnowing(...known: string[]): Tracker {
 const said = (text: string) => ({ user: text, all: text });
 
 describe('without a tracker', () => {
-  it('reports the primary and nothing else', async () => {
-    // Every other candidate would be a string that merely looks like a key,
-    // and nothing local can tell those apart — so claiming them is guessing.
+  it('still lists the keys the person raised', async () => {
+    // Two different claims live here. "This ticket exists, and its status is
+    // X" needs a tracker. "The person wrote this key in this session" does
+    // not — it is a fact about the transcript, and hiding it meant a session
+    // that opened six tickets showed none of them.
     const res = await sessionWorkItems('PROJ-1', said('PROJ-2'), null);
-    expect(res.tags).toEqual([{ tag: 'PROJ-1', mentions: 0 }]);
+    expect(res.tags).toEqual([
+      { tag: 'PROJ-1', mentions: 0 },
+      { tag: 'PROJ-2', mentions: 1 },
+    ]);
     expect(res.trackerConfigured).toBe(false);
   });
 
-  it('reports nothing at all for a session with no primary', async () => {
-    // The case that exposed the first cut: a session that discusses ticket
-    // handling without touching a ticket listed half a dozen of them.
+  it('lists them for a session with no primary at all', async () => {
     const res = await sessionWorkItems(null, said('PROJ-2'), null);
+    expect(res.tags).toEqual([{ tag: 'PROJ-2', mentions: 1 }]);
+  });
+
+  it('claims no status for any of them', async () => {
+    // No badge, so the card says the key was mentioned and nothing more.
+    const res = await sessionWorkItems(null, said('PROJ-2'), null);
+    expect(res.items).toEqual({});
+  });
+
+  it('still ignores a key only Claude ever said', async () => {
+    // The rule that matters is unchanged: a key Claude echoed is not evidence
+    // the session worked on it.
+    const res = await sessionWorkItems(null, { user: 'nothing here', all: 'PROJ-9' }, null);
     expect(res.tags).toEqual([]);
+  });
+
+  it('caps the list the same as with a tracker', async () => {
+    const many = Array.from({ length: MAX_SECONDARY + 5 }, (_, i) => `PROJ-${i + 1}`).join(' ');
+    const res = await sessionWorkItems(null, said(many), null);
+    expect(res.tags).toHaveLength(MAX_SECONDARY);
   });
 });
 
@@ -44,14 +66,34 @@ describe('with a tracker', () => {
     expect(res.items['PROJ-2'].state).toBe('inprogress');
   });
 
-  it('drops a key only Claude ever said', async () => {
+  it('drops a key Claude only mentioned in passing', async () => {
     // A session that discusses ticket handling quotes plenty of keys. Counting
-    // those filled the sidebar with tickets the session had nothing to do with;
-    // what the *person* raised is the signal.
+    // those filled the sidebar with tickets the session had nothing to do with.
     const res = await sessionWorkItems(
       null,
-      { user: 'nothing here', all: 'I printed PROJ-2 PROJ-2 PROJ-2 as an example' },
+      { user: 'nothing here', all: 'I printed PROJ-2 and PROJ-2 as an example' },
       trackerKnowing('PROJ-2'),
+    );
+    expect(res.tags).toEqual([]);
+  });
+
+  it('keeps a key Claude returned to, when the tracker confirms it', async () => {
+    // The session that made this necessary: told to open tickets, Claude names
+    // each one on creation, again in the summary, and again when linking it.
+    // The person never types any of them.
+    const res = await sessionWorkItems(
+      null,
+      { user: 'open the tickets', all: 'creating PROJ-9800. PROJ-9800 is in. linked PROJ-9800' },
+      trackerKnowing('PROJ-9800'),
+    );
+    expect(res.tags).toEqual([{ tag: 'PROJ-9800', mentions: 3 }]);
+  });
+
+  it('will not keep one the tracker cannot find, however often it is said', async () => {
+    const res = await sessionWorkItems(
+      null,
+      { user: 'nothing here', all: 'PROJ-404 PROJ-404 PROJ-404 PROJ-404' },
+      trackerKnowing('PROJ-1'),
     );
     expect(res.tags).toEqual([]);
   });

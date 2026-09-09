@@ -47,6 +47,30 @@ const containerTmuxSession = envName('CONTAINER_TMUX_SESSION', 'agent');
  * neutral name comes first and the original is accepted after it, so an
  * existing .env keeps working unchanged and nothing has to be migrated.
  */
+/**
+ * The item-URL template, from an explicit setting or from a Jira address.
+ *
+ * `JIRA_BASE_URL` and `ATLASSIAN_SITE_NAME` are already how the tracker is
+ * told where Jira is, so setting one of them should be enough to get links
+ * even when no token follows.
+ */
+function trackerItemUrl(): string {
+  const explicit = envFirst('TRACKER_ITEM_URL');
+  if (explicit) return explicit;
+
+  const base = envFirst('JIRA_BASE_URL')
+    ?? siteToBase(envFirst('ATLASSIAN_SITE_NAME'));
+  return base ? `${base.replace(/\/+$/, '')}/browse/{key}` : '';
+}
+
+/** `acme` or `acme.atlassian.net` — both name the same site. */
+function siteToBase(site: string | undefined): string | undefined {
+  if (!site) return undefined;
+  const trimmed = site.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (!trimmed) return undefined;
+  return `https://${trimmed.includes('.') ? trimmed : `${trimmed}.atlassian.net`}`;
+}
+
 function envFirst(...names: string[]): string | undefined {
   for (const name of names) {
     const value = process.env[name]?.trim();
@@ -210,6 +234,17 @@ export const config = {
   // Prefilled in the "Start development" dialog, e.g. 'PROJ-'. Cosmetic only —
   // any valid key can still be typed.
   tagPrefix: envFirst('TAG_PREFIX', 'JIRA_ISSUE_PREFIX') ?? '',
+
+  /**
+   * Where a work item lives, as a template with `{key}` in it.
+   *
+   * Separate from the tracker on purpose. A tracker fetches status and summary
+   * and needs an API token to do it; a link needs nothing but the address, and
+   * making somebody hand over a token to get a clickable key is a poor trade.
+   * With a tracker configured its own URL wins, since only it knows its
+   * format — this is the fallback that turns a key into a link on its own.
+   */
+  trackerItemUrl: trackerItemUrl(),
   // Which `mcpServers` entry in ~/.claude.json to read Atlassian credentials
   // from when JIRA_*/ATLASSIAN_* env vars aren't set. Empty means "any entry
   // that carries them" — see jira-credentials.ts.

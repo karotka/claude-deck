@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
+import { installedClaudeVersion } from '../services/claude-version.js';
 import { getTransports } from '../providers/registry.js';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 
@@ -18,6 +19,10 @@ export interface AppConfig {
    * tag looks like is exactly the duplication this refactor removes.
    */
   tagPattern: string;
+  /** Where a key links to, as a template with `{key}`. Empty when unset. */
+  trackerItemUrl: string;
+  /** Claude Code on this machine, so a session behind it can be spotted. */
+  claudeVersion: string | null;
   /** False when DOCKER_ENABLED=false — agent containers aren't scanned at all. */
   dockerEnabled: boolean;
   /**
@@ -40,6 +45,8 @@ export async function configRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/config', async (): Promise<AppConfig> => ({
     tagPrefix: config.tagPrefix,
     tagPattern: config.tagPattern,
+    trackerItemUrl: config.trackerItemUrl,
+    claudeVersion: await installedClaudeVersion(),
     dockerEnabled: config.dockerEnabled,
     maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
     transports: Object.fromEntries(

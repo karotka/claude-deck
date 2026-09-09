@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { type Session, type WorkItem, hideSession, unhideSession } from '../lib/api';
 import { WorkItemBadge } from './WorkItemBadge';
+import { workItemUrl, shortenItemLinks } from '../lib/work-item-url';
 import { stopPlanText, canDrive, interrupt, stop } from '../lib/session-actions';
 import { SourceBadge } from './SourceBadge';
 import { cn, formatTokens, formatCost, timeAgo, truncate, projectName, containerLabel } from '../lib/utils';
@@ -20,12 +21,26 @@ const statusLabels: Record<string, string> = {
 interface Props {
   session: Session;
   workItem?: WorkItem;
+  /** Where a key links to, from the server. Empty when nothing is configured. */
+  itemUrlTemplate?: string;
+  /** What a key looks like, from the server — never guessed at here. */
+  tagPattern?: string;
   onToggleHide?: () => void;
   /** Called after an action that changes what the board should show. */
   onChanged?: () => void;
 }
 
-export function SessionCard({ session, workItem, onToggleHide, onChanged }: Props) {
+export function SessionCard({
+  session,
+  workItem,
+  onToggleHide,
+  onChanged,
+  itemUrlTemplate,
+  tagPattern,
+}: Props) {
+  // stopPropagation on the anchor, not just preventDefault: the card is a link,
+  // and opening a ticket should not also open the session behind it.
+  const itemHref = workItem ? workItemUrl(workItem.tag, itemUrlTemplate, workItem.url) : null;
   const shortId = session.id.slice(0, 12);
   const project = projectName(session.projectPath);
   const modelShort = session.model
@@ -144,7 +159,20 @@ export function SessionCard({ session, workItem, onToggleHide, onChanged }: Prop
 
       {workItem && (
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold">{workItem.tag}</span>
+          {itemHref ? (
+            <a
+              href={itemHref}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              title="Open in the tracker"
+              className="text-xs font-semibold text-primary hover:underline"
+            >
+              {workItem.tag} &#8599;
+            </a>
+          ) : (
+            <span className="text-xs font-semibold">{workItem.tag}</span>
+          )}
           <WorkItemBadge item={workItem} />
         </div>
       )}
@@ -157,7 +185,7 @@ export function SessionCard({ session, workItem, onToggleHide, onChanged }: Prop
 
       {session.firstUserMessage && (
         <div className="text-sm text-foreground/80 mb-2 italic">
-          &ldquo;{truncate(session.firstUserMessage, 120)}&rdquo;
+          &ldquo;{truncate(shortenItemLinks(session.firstUserMessage, tagPattern), 120)}&rdquo;
         </div>
       )}
 

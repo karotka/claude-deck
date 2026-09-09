@@ -1,5 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useAppConfig } from '../hooks/useAppConfig';
+import { linkifyItemKeys } from '../lib/work-item-url';
 import type { Components } from 'react-markdown';
 import { cn } from '../lib/utils';
 
@@ -85,14 +87,22 @@ const COMPONENTS: Components = {
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
 };
 
-export function Markdown({ children, className }: { children: string; className?: string }) {
+export function Markdown({
+  children,
+  className,
+}: { children: string; className?: string }) {
+  const config = useAppConfig();
+  // Ticket keys become links before rendering rather than after: the renderer
+  // already turns markdown into links and nothing else, so this needs no new
+  // way for text to become markup.
+  const text = linkifyItemKeys(children, config?.tagPattern, config?.trackerItemUrl);
   return (
     // leading-snug rather than the browser default 1.5: matches the line rhythm
     // the timestamp gutter is spaced to, while giving prose the same extra air
     // as the rest of the transcript.
     <div className={cn('leading-snug', className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
-        {children}
+        {text}
       </ReactMarkdown>
     </div>
   );

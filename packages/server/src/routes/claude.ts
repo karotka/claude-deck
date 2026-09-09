@@ -6,6 +6,7 @@ import {
   launchClaudeSession,
   resumeSessionInTmux,
   attachCloudSessionInTmux,
+  restartSessionInTmux,
 } from '../services/claude-launcher.js';
 import { getLaunchedSessions } from '../services/launched-sessions.js';
 import { cacheLaunchedSession, getCachedSession } from '../services/session-discovery.js';
@@ -114,6 +115,29 @@ export async function claudeRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return reply.status(400).send({
         error: err instanceof Error ? err.message : 'Could not attach to that session',
+      });
+    }
+  });
+
+  /**
+   * Restart a session on the same conversation — the answer to Claude Code's
+   * "Update installed · Restart to update", which otherwise means finding the
+   * tmux session and doing it by hand.
+   */
+  app.post('/api/sessions/:sessionId/restart', async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    // Whether there is a conversation decides how it comes back: `--resume`
+    // for one that has been talked to, a fresh start under the same id for one
+    // that has not, since resume has nothing to find there.
+    const known = getCachedSession(sessionId);
+    const hasConversation = (known?.messageCount ?? 0) > 0;
+    try {
+      const entry = await restartSessionInTmux(sessionId, hasConversation);
+      cacheLaunchedSession(entry);
+      return { ok: true, entry };
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'restart failed',
       });
     }
   });
